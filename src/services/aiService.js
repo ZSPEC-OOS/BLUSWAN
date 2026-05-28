@@ -483,7 +483,7 @@ function buildAnthropicRequest(baseUrl, apiKey, modelId, body, modelConfig = {})
   const headers = {
     'Content-Type': 'application/json',
     'x-api-key': apiKey,
-    'anthropic-version': '2024-06-01',
+    'anthropic-version': '2023-06-01',
     'anthropic-dangerous-allow-browser': 'true',
   }
   if (modelConfig.enableThinking) {
@@ -967,7 +967,7 @@ export async function countTokensAnthropic(modelConfig, messages, systemPrompt) 
     headers: {
       'Content-Type': 'application/json',
       'x-api-key': apiKey,
-      'anthropic-version': '2024-06-01',
+      'anthropic-version': '2023-06-01',
       'anthropic-dangerous-allow-browser': 'true',
     },
     body: JSON.stringify(body),

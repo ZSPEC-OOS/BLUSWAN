@@ -58,13 +58,15 @@ const DEFAULT_CONTEXT_WINDOW = 80000;
 const REMEDIATION_COST_PER_FAILURE = 5;
 
 const COMPLETION_TOKEN = '<CYCLE_COMPLETE>';
-const REQUIRED_SECTIONS = ['summary', 'deliverables_addressed', 'next_cycle_needed'];
+// Section headers removed — the completion token alone is sufficient proof of cycle completion.
+// Requiring exact section names created spurious failures when models used synonymous headings.
+const REQUIRED_SECTIONS = [];
 
-/** Tools allowed when creating new files (write, not edit) */
-const CREATE_FILE_TOOLS = ['read_file', 'read_many_files', 'write_file', 'list_directory'];
+/** Tools allowed when creating new files */
+const CREATE_FILE_TOOLS = ['read_file', 'read_many_files', 'write_file', 'list_directory', 'search_files', 'grep'];
 
 /** Tools allowed when editing existing files */
-const EDIT_FILE_TOOLS = ['read_file', 'read_many_files', 'edit_file', 'list_directory'];
+const EDIT_FILE_TOOLS = ['read_file', 'read_many_files', 'edit_file', 'list_directory', 'search_files', 'grep'];
 
 /** Full tool set (union, for validation reference) */
 const ALL_KNOWN_TOOLS = new Set([

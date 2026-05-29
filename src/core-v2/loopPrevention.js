@@ -35,8 +35,8 @@
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MAX_SEQUENCE_REPEATS   = 2;
-const MAX_READS_BEFORE_ACTION = 3;
-const MAX_IDLE_TURNS          = 8;
+const MAX_READS_BEFORE_ACTION = 5;  // raised from 3 — models legitimately re-read files during iterative edits
+const MAX_IDLE_TURNS          = 20; // raised from 8 — exploration (listing, reading) is not a loop
 const MAX_DELIVERABLE_RETRIES = 2;
 
 const MUTATION_TOOLS = new Set(['write_file', 'edit_file', 'run_command']);

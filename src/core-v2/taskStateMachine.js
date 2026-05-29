@@ -185,7 +185,7 @@ export function createTaskState(plan, options = {}) {
     maxCycles,
     completionGates: [],
     contextBudget: options.contextBudget ?? { maxTokensPerCycle: 80000, usedTokens: 0 },
-    remediationBudget: options.remediationBudget ?? { maxSpend: 50, spent: 0 },
+    remediationBudget: options.remediationBudget ?? { maxSpend: 100, spent: 0 },
     phaseHistory: [{ phase: 'idle', at: now() }],
   };
 }

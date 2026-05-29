@@ -184,6 +184,57 @@ describe('runCompletionGates', () => {
     assert.ok(result.details.every((d) => 'id' in d && 'passed' in d && 'description' in d));
   });
 
+  it('command deliverable: only verifies against cycles that targeted it, not any run_command', async () => {
+    // Two test-type deliverables in separate cycles. deliv-1 is targeted by cycle 1 (which has a
+    // successful run_command); deliv-2 is targeted by cycle 2 (which has NO run_command).
+    // Before the fix, the single run_command in cycle 1 would have verified both deliverables.
+    let plan = createPlanContract({
+      version: '2026.1',
+      taskId: 'cross-contamination-test',
+      goal: 'Run two test suites',
+      estimatedCycles: 2,
+      deliverables: [
+        { id: 'deliv-1', type: 'test', description: 'Run unit tests', acceptanceCriteria: 'tests pass', completed: true },
+        { id: 'deliv-2', type: 'test', description: 'Run e2e tests', acceptanceCriteria: 'e2e pass', completed: true },
+      ],
+      dependencies: [],
+      validationSteps: [],
+      contextStrategy: { maxTokensPerCycle: 80000, includeRepoMap: false },
+    });
+
+    const cycle1 = {
+      cycleNumber: 1,
+      goal: 'unit tests',
+      targetDeliverables: ['deliv-1'],
+      allowedTools: ['run_command'],
+      maxTurns: 25,
+      turnsUsed: 1,
+      status: 'completed',
+      remediationSpent: 0,
+      completionProtocol: { completionToken: '<CYCLE_COMPLETE>', requiredSections: [] },
+      toolResults: [
+        { toolName: 'run_command', input: { command: 'npm test' }, output: 'e2e pass tests pass', error: undefined, turnNumber: 1 },
+      ],
+    };
+    const cycle2 = {
+      cycleNumber: 2,
+      goal: 'e2e tests',
+      targetDeliverables: ['deliv-2'],
+      allowedTools: ['run_command'],
+      maxTurns: 25,
+      turnsUsed: 1,
+      status: 'completed',
+      remediationSpent: 0,
+      completionProtocol: { completionToken: '<CYCLE_COMPLETE>', requiredSections: [] },
+      toolResults: [], // no run_command — deliv-2 should FAIL verification
+    };
+
+    const result = await runCompletionGates(plan, [cycle1, cycle2], safeExecuteTool);
+    assert.equal(result.passed, false, 'deliv-2 should fail: its cycle ran no command');
+    assert.equal(result.layer, 'deliverable_verification');
+    assert.equal(result.deliverableId, 'deliv-2');
+  });
+
   it('safety block does not roll back — plan remains unmodified', async () => {
     let plan = makePlan([{ type: 'file', path: 'src/foo.js', description: 'Foo' }]);
     plan = markDeliverableComplete(plan, 'deliv-1', { passed: true });

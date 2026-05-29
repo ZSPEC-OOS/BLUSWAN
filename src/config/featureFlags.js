@@ -200,6 +200,11 @@ export function getMigrationStatus() {
 }
 
 // ─── Backward-Compatible Export ───────────────────────────────────────────────
-// agentLoop.js and fsm.js import { FEATURES } at module load time.
+// FEATURES is a live Proxy so that runtime setFeatureFlag() calls are reflected
+// immediately in every consumer (agentLoop.js, fsm.js, etc.) without a page reload.
+// Each property access calls getFeatureFlags() fresh from the priority-ordered sources.
 
-export const FEATURES = getFeatureFlags();
+export const FEATURES = new Proxy(/** @type {FeatureFlags} */ ({}), {
+  get(_, key) { return getFeatureFlags()[key]; },
+  has(_, key) { return key in getFeatureFlags(); },
+});

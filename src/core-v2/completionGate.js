@@ -254,8 +254,13 @@ export async function runCompletionGates(plan, cycles, executeTool) {
         detail: fileExists ? undefined : `No successful write/edit found for '${path}'`,
       };
     } else if (deliverable.type === 'test' || deliverable.type === 'command') {
-      // Verify a command was executed successfully
-      const cmdResult = results.find(
+      // Verify a command ran in a cycle that targeted this specific deliverable.
+      // Scoping prevents one deliverable's run_command from satisfying another's.
+      const relevantCycles = cycles.filter((c) => c.targetDeliverables?.includes(deliverable.id));
+      const scopedResults = relevantCycles.length > 0
+        ? relevantCycles.flatMap((c) => c.toolResults ?? [])
+        : results;
+      const cmdResult = scopedResults.find(
         (r) => r.toolName === 'run_command' && !r.error
       );
       gateDetail = {

@@ -541,7 +541,7 @@ export async function runAgentLoop({
             } catch (err) {
               if (CACHEABLE_TOOLS.has(tc.name)) inFlight.delete(`${tc.name}:${JSON.stringify(tc.input || {})}`)
               onEvent({ type: 'tool_done', id, name: tc.name, result: `ERROR: ${err.message}`, error: err.message })
-              compressor.onToolResult(tc.name, `ERROR: ${err.message}`)
+              compressor?.onToolResult(tc.name, `ERROR: ${err.message}`)
               return `ERROR: ${err.message}`
             }
           }))

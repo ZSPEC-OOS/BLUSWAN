@@ -227,10 +227,40 @@ function collectValidationErrors(rawPlan) {
  * @since 2.0.0
  * @stable
  */
+const DELIVERABLE_TYPE_ALIASES = {
+  remove: 'edit', modify: 'edit', update: 'edit',
+  create: 'file', add: 'file',
+  run: 'command', execute: 'command',
+  spec: 'test',
+};
+
+function normalizeDeliverableType(type) {
+  if (typeof type !== 'string') return type;
+  if (VALID_DELIVERABLE_TYPES.has(type)) return type;
+  // Handle literal "file|edit|test|command" — pick first valid token
+  if (type.includes('|')) {
+    for (const part of type.split('|')) {
+      const t = part.trim();
+      if (VALID_DELIVERABLE_TYPES.has(t)) return t;
+    }
+  }
+  return DELIVERABLE_TYPE_ALIASES[type.toLowerCase()] ?? type;
+}
+
 export function createPlanContract(rawPlan) {
   // Auto-correct version so a stale LLM output doesn't fail the whole plan
   if (rawPlan && typeof rawPlan === 'object' && rawPlan.version !== PLAN_VERSION) {
     rawPlan = { ...rawPlan, version: PLAN_VERSION };
+  }
+
+  // Auto-correct deliverable types before strict validation
+  if (rawPlan && Array.isArray(rawPlan.deliverables)) {
+    rawPlan = {
+      ...rawPlan,
+      deliverables: rawPlan.deliverables.map((d) =>
+        d && typeof d === 'object' ? { ...d, type: normalizeDeliverableType(d.type) } : d
+      ),
+    };
   }
 
   const errors = collectValidationErrors(rawPlan);

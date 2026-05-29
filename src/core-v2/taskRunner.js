@@ -109,7 +109,7 @@ Return ONLY valid JSON matching this exact schema (no markdown, no explanation):
   "deliverables": [
     {
       "id": "deliv-1",
-      "type": "file|edit|test|command",
+      "type": "edit",
       "path": "<path>",
       "description": "<description>",
       "acceptanceCriteria": "<criteria>",
@@ -128,7 +128,8 @@ Return ONLY valid JSON matching this exact schema (no markdown, no explanation):
 Rules:
 - deliverable IDs must be unique
 - version must be "2026.1"
-- each deliverable must have id, type, description, and acceptanceCriteria`;
+- each deliverable must have id, type, description, and acceptanceCriteria
+- type must be exactly one of: "file" (create new file), "edit" (modify existing file), "test" (run tests), "command" (run shell command)`;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

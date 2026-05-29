@@ -396,8 +396,6 @@ export default function TaskDashboard({
   onModelsUpdate,
 }) {
   const [goal, setGoal]                   = useState('')
-  const [maxCycles, setMaxCycles]         = useState(3)
-  const [maxTurnsPerCycle, setMaxTurnsPerCycle] = useState(25)
   const [showModelSetup, setShowModelSetup] = useState(false)
   const [sidebarOpen, setSidebarOpen]     = useState(false)
 
@@ -443,7 +441,7 @@ export default function TaskDashboard({
       goal: goal.trim(),
       // No plan — taskRunner generates it via LLM from the goal
       options: {
-        maxCycles, maxTurnsPerCycle, contextWindow: 128000,
+        maxCycles: 3, maxTurnsPerCycle: 25, contextWindow: 128000,
         requirePlanReview: false, requireCompletionConfirm: false,
       },
     })
@@ -563,19 +561,6 @@ export default function TaskDashboard({
                       onChange={e => setGoal(e.target.value)}
                       rows={5}
                     />
-
-                    <div className="v2-composer-options">
-                      <div className="v2-composer-opt">
-                        <span className="v2-composer-opt-label">Max Cycles</span>
-                        <input type="number" min={1} max={10} value={maxCycles}
-                          onChange={e => setMaxCycles(Number(e.target.value))} />
-                      </div>
-                      <div className="v2-composer-opt">
-                        <span className="v2-composer-opt-label">Turns / Cycle</span>
-                        <input type="number" min={1} max={50} value={maxTurnsPerCycle}
-                          onChange={e => setMaxTurnsPerCycle(Number(e.target.value))} />
-                      </div>
-                    </div>
 
                     <div className="v2-composer-footer">
                       <button type="submit" className="v2-composer-submit" disabled={!goal.trim() || !hasModel}>

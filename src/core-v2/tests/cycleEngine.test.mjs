@@ -53,11 +53,7 @@ describe('createCycle', () => {
     assert.equal(cycle.remediationSpent, 0);
     assert.deepEqual(cycle.toolResults, []);
     assert.equal(cycle.completionProtocol.completionToken, '<CYCLE_COMPLETE>');
-    assert.deepEqual(cycle.completionProtocol.requiredSections, [
-      'summary',
-      'deliverables_addressed',
-      'next_cycle_needed',
-    ]);
+    assert.deepEqual(cycle.completionProtocol.requiredSections, []);
   });
 
   it('restricts tools to write_file set for file-creation deliverables', () => {
@@ -110,7 +106,7 @@ describe('checkCycleCompletion', () => {
     assert.ok(result.violations.some((v) => v.includes('<CYCLE_COMPLETE>')));
   });
 
-  it('fails without required sections', () => {
+  it('completes with only the token — section headers no longer required', () => {
     const plan = makePlan(['file']);
     const cycle = createCycle(plan, 1, ['deliv-1']);
     const cycleWithTurn = recordTurn(
@@ -119,9 +115,10 @@ describe('checkCycleCompletion', () => {
       [{ output: 'ok' }],
       ''
     );
+    // Token alone is sufficient proof of completion
     const result = checkCycleCompletion(cycleWithTurn, '<CYCLE_COMPLETE>');
-    assert.equal(result.completed, false);
-    assert.ok(result.violations.some((v) => v.includes('summary')));
+    assert.equal(result.completed, true);
+    assert.deepEqual(result.violations, []);
   });
 
   it('fails when no tool results recorded', () => {

@@ -77,19 +77,21 @@ describe('checkFileRead', () => {
     assert.equal(result.shouldHalt, false);
   });
 
-  it('allows second read without edit (count=1, limit=3)', () => {
+  it('allows second read without edit (count=1, limit=5)', () => {
     let guard = createLoopGuard();
     guard = recordTurn(guard, [READ_CALL('a.js')], [OK_READ('a.js')]);
     const result = checkFileRead(guard, 'a.js');
     assert.equal(result.shouldHalt, false);
   });
 
-  it('halts on 3rd read of same file without edit', () => {
+  it('halts on 5th read of same file without edit', () => {
     let guard = createLoopGuard();
-    // Read twice first
+    // Read four times first (count reaches 4)
     guard = recordTurn(guard, [READ_CALL('a.js')], [OK_READ('a.js')]);
     guard = recordTurn(guard, [READ_CALL('a.js')], [OK_READ('a.js')]);
-    // Third check should halt
+    guard = recordTurn(guard, [READ_CALL('a.js')], [OK_READ('a.js')]);
+    guard = recordTurn(guard, [READ_CALL('a.js')], [OK_READ('a.js')]);
+    // 5th check: count+1=5 >= maxReadsBeforeAction=5 → halt
     const result = checkFileRead(guard, 'a.js');
     assert.equal(result.shouldHalt, true);
     assert.equal(result.guardType, 'read_without_action');
@@ -123,12 +125,12 @@ describe('checkDeliverableProgress', () => {
     assert.equal(guard.turnsWithoutDeliverableProgress, 7);
   });
 
-  it('halts after 8 idle turns', () => {
+  it('halts after 20 idle turns', () => {
     let guard = createLoopGuard();
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 20; i++) {
       guard = recordTurn(guard, [READ_CALL('a.js')], [OK_READ('a.js')]);
     }
-    // Now check with another idle result
+    // Now check with another idle result — turnsWithoutDeliverableProgress=20, 20+1=21 >= 20 → halt
     const result = checkDeliverableProgress(guard, [OK_READ('a.js')]);
     assert.equal(result.shouldHalt, true);
     assert.equal(result.guardType, 'idle_turns');

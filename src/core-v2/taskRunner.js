@@ -63,7 +63,7 @@ import { createTelemetrySink } from './telemetry.js';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const DEFAULT_OPTIONS = {
-  maxCycles: 3,
+  maxCycles: 5,
   maxTurnsPerCycle: 25,
   contextWindow: 128000,
   remediationBudget: 100,

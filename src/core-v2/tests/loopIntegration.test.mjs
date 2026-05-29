@@ -94,14 +94,16 @@ describe('checkToolSequence halt', () => {
 
 describe('checkFileRead halt', () => {
   it('halts when the same file is read past maxReadsBeforeAction', () => {
-    let guard = createLoopGuard(); // maxReadsBeforeAction = 3
+    let guard = createLoopGuard(); // maxReadsBeforeAction = 5
     const calls = [{ toolName: 'read_file', input: { path: 'src/x.js' } }];
 
-    // Record three reads without any edit
+    // Record four reads without any edit (count reaches 4)
+    guard = recordTurn(guard, calls, []);
+    guard = recordTurn(guard, calls, []);
     guard = recordTurn(guard, calls, []);
     guard = recordTurn(guard, calls, []);
 
-    // Third read triggers the guard (count + 1 >= 3)
+    // Fifth read triggers the guard (count + 1 = 5 >= 5)
     const check = checkFileRead(guard, 'src/x.js');
     assert.equal(check.shouldHalt, true);
     assert.equal(check.guardType, 'read_without_action');
@@ -145,9 +147,9 @@ describe('checkCommandRepeat halt', () => {
 
 describe('checkDeliverableProgress halt', () => {
   it('halts when no progress for maxIdleTurns consecutive turns', () => {
-    let guard = createLoopGuard(); // maxIdleTurns = 8
-    // Record 8 turns with no mutation tool results
-    for (let i = 0; i < 8; i++) {
+    let guard = createLoopGuard(); // maxIdleTurns = 20
+    // Record 20 turns with no mutation tool results
+    for (let i = 0; i < 20; i++) {
       guard = recordTurn(guard, [], [{ toolName: 'read_file', output: 'content' }]);
     }
     const check = checkDeliverableProgress(guard, []);

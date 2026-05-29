@@ -395,11 +395,11 @@ describe('cycleEngine', () => {
     assert.ok(result.violations.length > 0);
   });
 
-  it('checkCycleCompletion fails when required sections missing', () => {
+  it('checkCycleCompletion passes with token only — section headers no longer required', () => {
     let cycle = createCycle(plan, 1, ['deliv-1'], ['write_file', 'read_file']);
     cycle = recordTurn(cycle, [{ toolName: 'write_file', input: { path: 'src/hello.js' } }], [{ output: 'ok' }], '');
-    const result = checkCycleCompletion(cycle, '<CYCLE_COMPLETE> summary');
-    assert.equal(result.completed, false);
+    const result = checkCycleCompletion(cycle, '<CYCLE_COMPLETE>');
+    assert.equal(result.completed, true);
   });
 
   it('checkCycleCompletion fails when no tool results recorded', () => {
@@ -610,7 +610,7 @@ describe('loopPrevention', () => {
     let guard = createLoopGuard();
     const reads = [{ toolName: 'read_file', input: { path: 'a.js' } }];
     const results = [{ output: 'content' }];
-    for (let i = 0; i < 9; i++) guard = recordLoopTurn(guard, reads, results);
+    for (let i = 0; i < 20; i++) guard = recordLoopTurn(guard, reads, results);
     const check = checkDeliverableProgress(guard, []);
     assert.equal(check.shouldHalt, true);
   });

@@ -70,7 +70,7 @@ describe('getFeatureFlags', () => {
 
   it('returns correct numeric defaults', () => {
     const f = getFeatureFlags();
-    assert.equal(f.maxCycles, 3);
+    assert.equal(f.maxCycles, 5);
     assert.equal(f.maxTurnsPerCycle, 25);
     assert.equal(f.contextWindow, 128000);
     assert.equal(f.remediationBudget, 100);

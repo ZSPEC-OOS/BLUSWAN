@@ -57,6 +57,7 @@ import { createTelemetrySink } from './telemetry.js';
  * @property {(error: import('./errorClassifier.js').ClassifiedError) => void} onError
  * @property {(messages: Object[]) => Promise<string>} callLLM
  * @property {(name: string, input: Object) => Promise<string>} executeTool
+ * @property {((report: Object) => void) | undefined} [onTelemetryFlush] - Optional; called when telemetry is flushed
  */
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -254,18 +255,6 @@ async function runCycleTurns(cycle, context, callbacks, budget, deliverables, re
   let currentContext = context;
 
   for (let turn = 1; turn <= cycle.maxTurns; turn++) {
-    // Check loop guards before this turn (except turn 1)
-    if (turn > 1) {
-      const seqCheck = checkToolSequence(loopGuard, []);
-      if (seqCheck.shouldHalt) {
-        return { status: 'halted', haltReason: seqCheck.reason, guardType: seqCheck.guardType, turnsUsed: turn - 1, cycle: currentCycle };
-      }
-      const progressCheck = checkDeliverableProgress(loopGuard, []);
-      if (progressCheck.shouldHalt) {
-        return { status: 'halted', haltReason: progressCheck.reason, guardType: progressCheck.guardType, turnsUsed: turn - 1, cycle: currentCycle };
-      }
-    }
-
     // Call LLM
     let assistantMessage;
     try {
@@ -430,9 +419,10 @@ async function generatePlan(goal, callbacks) {
 export async function runTask(taskSpec, callbacks) {
   const startTime = Date.now();
   const opts = { ...DEFAULT_OPTIONS, ...(taskSpec.options ?? {}) };
-  const telemetry = createTelemetrySink({ onFlush: callbacks.onTelemetryFlush });
+  // onTelemetryFlush is optional — guard so callers that don't provide it don't break the sink
+  const telemetryOpts = callbacks.onTelemetryFlush ? { onFlush: callbacks.onTelemetryFlush } : {};
+  const telemetry = createTelemetrySink(telemetryOpts);
   telemetry.emit('task.start', taskSpec.taskId, { goal: taskSpec.goal });
-
   let contextBudget;
   try {
     contextBudget = createContextBudget(opts.contextWindow);
@@ -547,6 +537,8 @@ export async function runTask(taskSpec, callbacks) {
     const targetDeliverables = state.plan.deliverables.filter((d) => targetIds.includes(d.id));
     const allowedTools = getAllowedTools(targetDeliverables);
 
+    // Cycle numbers are 1-indexed (human-facing). currentCycle is about to become
+    // currentCycle+1, so the 1-based number is (currentCycle+1)+1 = currentCycle+2.
     let cycle = createCycle(state.plan, state.currentCycle + 2, targetIds, allowedTools);
 
     state = transition(state, 'cycle_prep');

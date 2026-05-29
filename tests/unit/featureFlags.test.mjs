@@ -235,9 +235,21 @@ describe('getMigrationStatus', () => {
 });
 
 describe('FEATURES backward-compat export', () => {
+  beforeEach(() => setupBrowserGlobals());
+  after(() => teardownBrowserGlobals());
+
   it('FEATURES is an object with at least useV2Engine and useV2UI', () => {
     assert.ok(typeof FEATURES === 'object' && FEATURES !== null);
     assert.ok('useV2Engine' in FEATURES);
     assert.ok('useV2UI' in FEATURES);
+  });
+
+  it('FEATURES reflects runtime setFeatureFlag changes without re-import', () => {
+    resetFeatureFlags();
+    const before = FEATURES.maxCycles;
+    setFeatureFlag('maxCycles', 99);
+    assert.equal(FEATURES.maxCycles, 99, 'Proxy should return updated value immediately');
+    resetFeatureFlags();
+    assert.equal(FEATURES.maxCycles, before, 'Proxy should revert after reset');
   });
 });

@@ -441,7 +441,7 @@ export default function TaskDashboard({
       goal: goal.trim(),
       // No plan — taskRunner generates it via LLM from the goal
       options: {
-        maxCycles: 3, maxTurnsPerCycle: 25, contextWindow: 128000,
+        maxCycles: 10, maxTurnsPerCycle: 100, contextWindow: 128000,
         requirePlanReview: false, requireCompletionConfirm: false,
       },
     })

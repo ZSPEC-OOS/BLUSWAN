@@ -1,0 +1,72 @@
+// Centralized runtime configuration. Credentials come from the environment
+// (VITE_* when executing browser-side) and are never logged.
+
+const DEFAULTS = Object.freeze({
+  defaultProvider: 'deepseek',
+  maxTurns: 25,
+  requestTimeoutMs: 60_000,
+  streamTimeoutMs: 60_000,
+  maxOutputTokens: 8192,
+  temperature: 0,
+  devLogging: false,
+})
+
+function readEnv() {
+  try { if (import.meta.env) return import.meta.env } catch {}
+  return typeof process !== 'undefined' ? process.env : {}
+}
+
+function int(value, fallback) {
+  const n = Number.parseInt(value, 10)
+  return Number.isFinite(n) && n > 0 ? n : fallback
+}
+
+/**
+ * Pure: builds a frozen config from an env-like object.
+ * Per-provider settings live under `providers[providerId]`.
+ */
+export function loadRuntimeConfig(env = readEnv()) {
+  const deepseekModel = env.VITE_DEEPSEEK_MODEL || ''
+  return Object.freeze({
+    defaultProvider: env.VITE_BLUSWAN_PROVIDER || DEFAULTS.defaultProvider,
+    defaultModel: env.VITE_BLUSWAN_MODEL || deepseekModel,
+    maxTurns: int(env.VITE_BLUSWAN_MAX_TURNS, DEFAULTS.maxTurns),
+    requestTimeoutMs: int(env.VITE_BLUSWAN_REQUEST_TIMEOUT_MS, DEFAULTS.requestTimeoutMs),
+    streamTimeoutMs: int(env.VITE_BLUSWAN_STREAM_TIMEOUT_MS, DEFAULTS.streamTimeoutMs),
+    maxOutputTokens: int(env.VITE_BLUSWAN_MAX_OUTPUT_TOKENS, DEFAULTS.maxOutputTokens),
+    temperature: DEFAULTS.temperature,
+    devLogging: env.VITE_BLUSWAN_DEV_LOGGING === 'true' || !!env.DEV,
+    providers: Object.freeze({
+      deepseek: Object.freeze({
+        apiKey: env.VITE_DEEPSEEK_API_KEY || '',
+        baseUrl: env.VITE_DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
+        model: deepseekModel,
+      }),
+    }),
+  })
+}
+
+let cached = null
+export function getRuntimeConfig() {
+  if (!cached) cached = loadRuntimeConfig()
+  return cached
+}
+
+export function getProviderConfig(providerId, config = getRuntimeConfig()) {
+  return config.providers[providerId] ?? {}
+}
+
+/** Canonical model reference derived from configuration. */
+export function getDefaultModelRef(config = getRuntimeConfig()) {
+  const model = config.defaultModel || getProviderConfig(config.defaultProvider, config).model || ''
+  return { provider: config.defaultProvider, model }
+}
+
+/** Returns a copy safe for logging: secrets masked. */
+export function redactConfig(config = getRuntimeConfig()) {
+  const providers = {}
+  for (const [id, p] of Object.entries(config.providers)) {
+    providers[id] = { ...p, apiKey: p.apiKey ? '[redacted]' : '' }
+  }
+  return { ...config, providers }
+}

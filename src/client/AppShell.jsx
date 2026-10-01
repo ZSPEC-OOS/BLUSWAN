@@ -6,9 +6,12 @@ import { getDefaultModelRef } from '../config/runtimeConfig.js'
 import SessionView from './SessionView.jsx'
 import ChatComposer from './ChatComposer.jsx'
 
-export default function AppShell({ userEmail, onLogout, runtime: injected }) {
+// `workspaceId` connects the session to a workspace owned by the host (the browser has no
+// filesystem access; a Node host injects a runtime and workspace). Without one the agent can chat
+// but its repository tools are unavailable.
+export default function AppShell({ userEmail, onLogout, runtime: injected, workspaceId = null }) {
   const [runtime] = useState(() => injected ?? createAgentRuntime())
-  const [sessionId] = useState(() => runtime.startSession({ model: getDefaultModelRef() }).id)
+  const [sessionId] = useState(() => runtime.startSession({ workspaceId, model: getDefaultModelRef() }).id)
   const [session, setSession] = useState(() => runtime.getSession(sessionId))
 
   useEffect(() => {
@@ -33,11 +36,16 @@ export default function AppShell({ userEmail, onLogout, runtime: injected }) {
         </span>
         {onLogout && <button onClick={onLogout}>Sign out</button>}
       </header>
+      {!workspaceId && (
+        <div role="status" style={{ background: '#1e293b', color: '#fcd34d', padding: '0.4rem 1rem', fontSize: '0.8rem' }}>
+          No workspace connected — repository tools are unavailable in the browser. Run the agent against a local repository with <code>npm run agent -- --workspace &lt;dir&gt; &quot;your request&quot;</code>.
+        </div>
+      )}
       <SessionView session={session} />
       <ChatComposer
-        disabled={!sessionId || running || session?.status === 'cancelled'}
+        disabled={!sessionId || running}
         running={running}
-        onSubmit={(text) => { runtime.sendMessage(sessionId, text).catch(() => {}) }}
+        onSubmit={(text) => { runtime.sendMessage(sessionId, text).catch(() => {}) /* session_busy etc. surface via session state */ }}
         onCancel={() => runtime.cancelSession(sessionId)}
       />
     </div>

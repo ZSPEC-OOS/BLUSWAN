@@ -3,7 +3,7 @@
 
 export const TOOL_ERROR_CODES = Object.freeze([
   'invalid_input',
-  'tool_not_found',
+  'unknown_tool',
   'workspace_not_found',
   'path_outside_workspace',
   'file_not_found',
@@ -12,11 +12,14 @@ export const TOOL_ERROR_CODES = Object.freeze([
   'binary_file',
   'already_exists',
   'permission_denied',
+  'permission_required',
+  'loop_detected',
   'patch_parse_error',
   'patch_apply_failed',
   'command_failed',
   'command_timeout',
   'command_cancelled',
+  'tool_cancelled',
   'git_not_repository',
   'git_error',
   'output_limit_exceeded',

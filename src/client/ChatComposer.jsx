@@ -22,7 +22,7 @@ export default function ChatComposer({ disabled, running, onSubmit, onCancel }) 
         style={{ flex: 1, resize: 'none', background: '#0f172a', color: '#e2e8f0', border: '1px solid #1e293b', borderRadius: 6, padding: '0.5rem' }}
       />
       {running
-        ? <button type="button" onClick={onCancel}>Cancel</button>
+        ? <button type="button" onClick={onCancel}>Stop</button>
         : <button type="submit" disabled={disabled || !text.trim()}>Send</button>}
     </form>
   )

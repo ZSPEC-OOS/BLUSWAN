@@ -2,7 +2,7 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { createProviderRegistry, defaultRegistry } from './registry.js'
 import { createFakeProvider } from '../agent/testing/fakeProvider.js'
-import { textDelta, toolCall, usage, completed, normalizeUsage, isValidProviderEvent } from './normalize.js'
+import { textDelta, reasoningDelta, toolCallComplete, usage, completed, normalizeUsage, isValidProviderEvent } from './normalize.js'
 import {
   createDeepSeekProvider, createChunkParser, errorFromResponse, errorFromException,
   validateConfig, capabilitiesFor, normalizeTools, normalizeMessages, buildHeaders, buildUrl, readSse,
@@ -28,14 +28,15 @@ describe('provider registry', () => {
 describe('provider normalization', () => {
   it('builds valid neutral events', () => {
     assert.ok(isValidProviderEvent(textDelta('a')))
-    assert.ok(isValidProviderEvent(toolCall({ id: '1', name: 'read_file', arguments: { path: 'a' } })))
+    assert.ok(isValidProviderEvent(toolCallComplete({ id: '1', name: 'read_file', input: { path: 'a' } })))
+    assert.ok(isValidProviderEvent(reasoningDelta('r')))
     assert.ok(isValidProviderEvent(usage({ input: 2, output: 3 })))
     assert.ok(isValidProviderEvent(completed()))
     assert.equal(isValidProviderEvent({ type: 'native_chunk' }), false)
   })
   it('normalizes usage totals', () => {
-    assert.deepEqual(normalizeUsage({ input: 2, output: 3 }), { input: 2, output: 3, total: 5 })
-    assert.deepEqual(normalizeUsage({}), { input: 0, output: 0, total: 0 })
+    assert.deepEqual(normalizeUsage({ input: 2, output: 3 }), { input: 2, output: 3, reasoning: 0, total: 5 })
+    assert.deepEqual(normalizeUsage({}), { input: 0, output: 0, reasoning: 0, total: 0 })
   })
 })
 
@@ -57,9 +58,9 @@ describe('deepseek adapter', () => {
     assert.equal(capabilitiesFor('unknown').streaming, true)
   })
   it('converts tools and messages', () => {
-    assert.deepEqual(normalizeTools([{ name: 't', description: 'd', parameters: { type: 'object' } }]),
+    assert.deepEqual(normalizeTools([{ name: 't', description: 'd', inputSchema: { type: 'object' } }]),
       [{ type: 'function', function: { name: 't', description: 'd', parameters: { type: 'object' } } }])
-    const [m] = normalizeMessages([{ role: 'assistant', content: '', toolCalls: [{ id: '1', name: 't', arguments: { a: 1 } }] }])
+    const [m] = normalizeMessages([{ role: 'assistant', content: '', toolCalls: [{ id: '1', name: 't', input: { a: 1 } }] }])
     assert.equal(m.tool_calls[0].function.arguments, '{"a":1}')
   })
   it('maps HTTP and network failures', () => {
@@ -81,14 +82,17 @@ describe('deepseek adapter', () => {
       ...p.push({ choices: [], usage: { prompt_tokens: 4, completion_tokens: 6, total_tokens: 10 } }),
       ...p.flush(),
     ]
-    assert.deepEqual(out.map(e => e.type), ['text_delta', 'reasoning_status', 'usage', 'tool_call', 'completed'])
-    assert.deepEqual(out.find(e => e.type === 'tool_call').arguments, { path: 'a' })
+    assert.deepEqual(out.map(e => e.type), ['text_delta', 'reasoning_delta', 'tool_call_start', 'tool_call_delta', 'tool_call_delta', 'usage', 'tool_call_complete', 'completed'])
+    assert.deepEqual(out.find(e => e.type === 'tool_call_complete').input, { path: 'a' })
     assert.equal(out.at(-1).finishReason, 'tool_calls')
   })
-  it('rejects malformed tool arguments', () => {
+  it('turns malformed tool arguments into a recoverable inputError', () => {
     const p = createChunkParser()
     p.push({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c', function: { name: 'x', arguments: '{bad' } }] } }] })
-    assert.throws(() => p.flush(), e => e.code === 'invalid_response')
+    const done = p.flush().find(e => e.type === 'tool_call_complete')
+    assert.equal(done.input, null)
+    assert.match(done.inputError, /not valid JSON/)
+    assert.equal(done.rawArguments, '{bad')
   })
 
   function sseResponse(lines, status = 200) {

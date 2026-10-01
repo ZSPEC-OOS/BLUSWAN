@@ -8,6 +8,7 @@ export const EVENT_TYPES = Object.freeze([
   'assistant.text.delta',
   'assistant.text.completed',
   'assistant.reasoning.status',
+  'provider.retry',
   'tool.started',
   'tool.completed',
   'tool.failed',

@@ -35,12 +35,12 @@ describe('agent runtime', () => {
     const done = await runtime.sendMessage(s.id, 'Fix the auth race.')
     assert.deepEqual(events, [
       'session.started', 'user.message', 'session.updated',
-      'assistant.text.delta', 'assistant.text.delta', 'assistant.text.completed', 'session.updated',
+      'assistant.text.delta', 'assistant.text.delta', 'assistant.text.completed', 'session.completed',
     ])
-    assert.equal(done.status, 'idle')
+    assert.equal(done.status, 'completed')
     assert.deepEqual(done.messages.map(m => [m.role, m.content]),
       [['user', 'Fix the auth race.'], ['assistant', 'Inspecting repository...']])
-    assert.deepEqual(done.tokenUsage, { input: 3, output: 4, total: 7 })
+    assert.deepEqual(done.tokenUsage, { input: 3, output: 4, reasoning: 0, total: 7 })
     assert.equal(provider.requests[0].messages[0].role, 'system')
     assert.equal(provider.requests[0].model, 'm1')
   })
@@ -48,11 +48,11 @@ describe('agent runtime', () => {
   it('transitions through running and continues the same session', async () => {
     const { runtime, provider } = setup({ script: [{ type: 'text_delta', text: 'ok' }, { type: 'completed', finishReason: 'stop' }] })
     const statuses = []
-    runtime.subscribe((e, s) => { if (e.type === 'session.updated') statuses.push(s.status) })
+    runtime.subscribe((e, s) => { if (e.type === 'session.updated' || e.type === 'session.completed') statuses.push(s.status) })
     const s = runtime.startSession({ model })
     await runtime.sendMessage(s.id, 'one')
     await runtime.sendMessage(s.id, 'two')
-    assert.deepEqual(statuses, ['running', 'idle', 'running', 'idle'])
+    assert.deepEqual(statuses, ['running', 'completed', 'running', 'completed'])
     assert.equal(provider.requests[1].messages.filter(m => m.role === 'user').length, 2)
   })
 
@@ -60,10 +60,10 @@ describe('agent runtime', () => {
     const { runtime } = setup({ hang: true })
     const s = runtime.startSession({ model })
     const p = runtime.sendMessage(s.id, 'a')
-    await assert.rejects(runtime.sendMessage(s.id, 'b'), /cannot accept/)
+    await assert.rejects(runtime.sendMessage(s.id, 'b'), e => e.code === 'session_busy')
     runtime.cancelSession(s.id)
     await p
-    await assert.rejects(runtime.sendMessage(s.id, '  '), /cannot accept|required/)
+    await assert.rejects(runtime.sendMessage(s.id, '  '), /required/)
   })
 
   it('reports provider failures as session.failed with a normalized error', async () => {
@@ -93,13 +93,6 @@ describe('agent runtime', () => {
     const s = runtime.startSession({ model: { provider: 'nope', model: 'x' } })
     const done = await runtime.sendMessage(s.id, 'go')
     assert.equal(done.events.find(e => e.type === 'session.failed').data.error.code, 'configuration_error')
-  })
-
-  it('treats a tool call as invalid_response while no tools are offered', async () => {
-    const { runtime } = setup({ script: [{ type: 'tool_call', id: '1', name: 'read_file', arguments: {} }, { type: 'completed', finishReason: 'tool_calls' }] })
-    const s = runtime.startSession({ model })
-    const done = await runtime.sendMessage(s.id, 'go')
-    assert.equal(done.events.find(e => e.type === 'session.failed').data.error.code, 'invalid_response')
   })
 
   it('cancels an in-flight request', async () => {

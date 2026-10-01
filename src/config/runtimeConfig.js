@@ -7,6 +7,11 @@ const DEFAULTS = Object.freeze({
   requestTimeoutMs: 60_000,
   streamTimeoutMs: 60_000,
   maxOutputTokens: 8192,
+  maxTransportRetries: 2,
+  retryBaseDelayMs: 500,
+  retryMaxDelayMs: 8000,
+  maxIdenticalToolCalls: 3,
+  maxFailedTurns: 6,
   temperature: 0,
   devLogging: false,
 })
@@ -28,6 +33,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   maxDirectoryDepth: 5,
   maxDirectoryEntries: 1000,
   maxIndexedFiles: 50_000,
+  maxToolResultChars: 60_000,
   defaultShellTimeoutMs: 120_000,
   maxShellTimeoutMs: 600_000,
 })
@@ -42,6 +48,11 @@ function int(value, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback
 }
 
+function nonNegInt(value, fallback) {
+  const n = Number.parseInt(value, 10)
+  return Number.isFinite(n) && n >= 0 ? n : fallback
+}
+
 /**
  * Pure: builds a frozen config from an env-like object.
  * Per-provider settings live under `providers[providerId]`.
@@ -52,7 +63,7 @@ export function loadRuntimeConfig(env = readEnv()) {
     const envKey = `VITE_BLUSWAN_LIMIT_${key.replace(/[A-Z]/g, c => `_${c}`).toUpperCase()}`
     limits[key] = int(env[envKey], fallback)
   }
-  const deepseekModel = env.VITE_DEEPSEEK_MODEL || ''
+  const deepseekModel = env.VITE_DEEPSEEK_MODEL || env.DEEPSEEK_MODEL || ''
   return Object.freeze({
     defaultProvider: env.VITE_BLUSWAN_PROVIDER || DEFAULTS.defaultProvider,
     defaultModel: env.VITE_BLUSWAN_MODEL || deepseekModel,
@@ -60,13 +71,18 @@ export function loadRuntimeConfig(env = readEnv()) {
     requestTimeoutMs: int(env.VITE_BLUSWAN_REQUEST_TIMEOUT_MS, DEFAULTS.requestTimeoutMs),
     streamTimeoutMs: int(env.VITE_BLUSWAN_STREAM_TIMEOUT_MS, DEFAULTS.streamTimeoutMs),
     maxOutputTokens: int(env.VITE_BLUSWAN_MAX_OUTPUT_TOKENS, DEFAULTS.maxOutputTokens),
+    maxTransportRetries: nonNegInt(env.VITE_BLUSWAN_MAX_TRANSPORT_RETRIES, DEFAULTS.maxTransportRetries),
+    retryBaseDelayMs: nonNegInt(env.VITE_BLUSWAN_RETRY_BASE_DELAY_MS, DEFAULTS.retryBaseDelayMs),
+    retryMaxDelayMs: int(env.VITE_BLUSWAN_RETRY_MAX_DELAY_MS, DEFAULTS.retryMaxDelayMs),
+    maxIdenticalToolCalls: int(env.VITE_BLUSWAN_MAX_IDENTICAL_TOOL_CALLS, DEFAULTS.maxIdenticalToolCalls),
+    maxFailedTurns: int(env.VITE_BLUSWAN_MAX_FAILED_TURNS, DEFAULTS.maxFailedTurns),
     temperature: DEFAULTS.temperature,
     limits: Object.freeze(limits),
     devLogging: env.VITE_BLUSWAN_DEV_LOGGING === 'true' || !!env.DEV,
     providers: Object.freeze({
       deepseek: Object.freeze({
-        apiKey: env.VITE_DEEPSEEK_API_KEY || '',
-        baseUrl: env.VITE_DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
+        apiKey: env.VITE_DEEPSEEK_API_KEY || env.DEEPSEEK_API_KEY || '',
+        baseUrl: env.VITE_DEEPSEEK_BASE_URL || env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
         model: deepseekModel,
       }),
     }),

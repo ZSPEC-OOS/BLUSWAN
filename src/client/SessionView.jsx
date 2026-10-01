@@ -1,27 +1,6 @@
-// Renders a session: messages, live streaming text, runtime activity, status, errors.
-
-const ACTIVITY_TYPES = new Set([
-  'tool.started', 'tool.completed', 'tool.failed', 'file.changed',
-  'command.started', 'command.completed', 'validation.started', 'validation.completed',
-])
-
-// Streaming text that has not yet been committed as an assistant message.
-function liveText(events) {
-  let text = ''
-  for (const e of events) {
-    if (e.type === 'user.message' || e.type === 'assistant.text.completed') text = ''
-    else if (e.type === 'assistant.text.delta') text += e.data.text ?? ''
-  }
-  return text
-}
-
-function lastError(events) {
-  for (let i = events.length - 1; i >= 0; i--) {
-    if (events[i].type === 'session.failed') return events[i].data.error
-    if (events[i].type === 'user.message') return null
-  }
-  return null
-}
+// Renders a session: messages, live streaming text, tool activity, notices and errors,
+// all derived from normalized runtime events.
+import { buildTimeline, liveText } from './activity.js'
 
 const bubble = (role) => ({
   alignSelf: role === 'user' ? 'flex-end' : 'flex-start',
@@ -33,28 +12,32 @@ const bubble = (role) => ({
   color: '#e2e8f0',
 })
 
+const MARK = { running: '▸', done: '✓', failed: '✗' }
+
 export default function SessionView({ session }) {
   if (!session) return null
+  const timeline = buildTimeline(session.events)
   const streaming = session.status === 'running' ? liveText(session.events) : ''
-  const error = session.status === 'error' ? lastError(session.events) : null
-  const activity = session.events.filter(e => ACTIVITY_TYPES.has(e.type))
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '1rem' }}>
-      {session.messages.length === 0 && (
-        <div style={{ color: '#64748b' }}>Describe a coding task to begin.</div>
-      )}
-      {session.messages.map(m => <div key={m.id} style={bubble(m.role)}>{m.content}</div>)}
+      {timeline.length === 0 && <div style={{ color: '#64748b' }}>Describe a coding task to begin.</div>}
+      {timeline.map(item => {
+        if (item.kind === 'user' || item.kind === 'assistant') return <div key={item.id} style={bubble(item.kind)}>{item.text}</div>
+        if (item.kind === 'tool') {
+          return (
+            <div key={item.id} style={{ color: item.status === 'failed' ? '#fca5a5' : '#64748b', fontSize: '0.8rem' }}>
+              {MARK[item.status]} {item.label}{item.status === 'failed' && item.error ? ` — ${item.error}` : ''}
+              {item.changed.map(c => <div key={c} style={{ paddingLeft: '1rem', color: '#86efac' }}>{c}</div>)}
+            </div>
+          )
+        }
+        if (item.kind === 'error') {
+          return <div key={item.id} role="alert" style={{ color: '#fca5a5' }}>{item.text} <span style={{ opacity: 0.6 }}>({item.code})</span></div>
+        }
+        return <div key={item.id} style={{ color: '#fcd34d', fontSize: '0.85rem' }}>{item.text}</div>
+      })}
       {streaming && <div style={bubble('assistant')}>{streaming}</div>}
-      {activity.map(e => (
-        <div key={e.id} style={{ color: '#64748b', fontSize: '0.8rem' }}>▸ {e.type} {e.data.name ?? e.data.path ?? ''}</div>
-      ))}
-      {session.status === 'cancelled' && <div style={{ color: '#fcd34d' }}>Session cancelled.</div>}
-      {error && (
-        <div role="alert" style={{ color: '#fca5a5' }}>
-          {error.message} <span style={{ opacity: 0.6 }}>({error.code})</span>
-        </div>
-      )}
     </div>
   )
 }

@@ -41,10 +41,11 @@ describe('Phase 2 acceptance: repository → patch → test → diff, no AI prov
     const read = await exec('read_file', { path: 'src/math.js' })
     assert.match(read.output.content, /return a - b/)
 
+    assert.equal((await exec('read_file', { path: 'src/missing.js' })).error.code, 'file_not_found')
+
     // the fixture test fails before the fix
     const before = await exec('shell', { command: 'npm test' })
-    assert.equal(before.ok, false)
-    assert.equal(before.error.code, 'command_failed')
+    assert.equal(before.ok, true)
     assert.notEqual(before.output.exitCode, 0)
 
     // patch
@@ -78,17 +79,16 @@ describe('Phase 2 acceptance: repository → patch → test → diff, no AI prov
   it('records tool calls, changed files and events on the session', () => {
     const s = runtime.getSession(session.id)
     assert.equal(s.workspaceId, session.workspaceId)
-    assert.equal(s.toolCalls.length, 9)
+    assert.equal(s.toolCalls.length, 10)
     assert.ok(s.toolCalls.every(c => c.status === 'completed' || c.status === 'failed'))
     const patch = s.toolCalls.find(c => c.name === 'apply_patch')
-    assert.deepEqual([patch.status, patch.result.ok, typeof patch.startedAt, typeof patch.completedAt], ['completed', true, 'number', 'number'])
-    assert.deepEqual(s.changedFiles, ['src/math.js'])
+    assert.deepEqual([patch.status, patch.resultSummary.ok, typeof patch.startedAt, typeof patch.completedAt], ['completed', true, 'number', 'number'])
+    assert.deepEqual(s.changedFiles, [{ path: 'src/math.js', action: 'modified' }])
 
     const forTool = id => events.filter(e => e.data.toolCallId === id).map(e => e.type)
-    assert.deepEqual(forTool(patch.id), ['tool.started', 'tool.completed', 'file.changed'])
+    assert.deepEqual(forTool(patch.id), ['tool.started', 'file.changed', 'tool.completed'])
     const failed = s.toolCalls.find(c => c.status === 'failed')
     assert.deepEqual(forTool(failed.id), ['tool.started', 'tool.failed'])
-    assert.equal(patch.result.toolCallId, patch.id)
   })
 
   it('exposes the canonical tool descriptors', () => {
@@ -141,6 +141,7 @@ describe('runtime tool execution edge cases', () => {
     assert.equal(r.error.code, 'command_cancelled')
     assert.ok(types.includes('tool.failed') && types.includes('session.cancelled'))
     assert.equal(runtime.getSession(s.id).status, 'cancelled')
-    await assert.rejects(runtime.executeTool(s.id, { name: 'git_status' }), /cancelled/)
+    // a stopped run leaves the conversation reopenable
+    assert.equal((await runtime.executeTool(s.id, { name: 'git_status' })).ok, true)
   })
 })

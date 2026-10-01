@@ -1,3 +1,5 @@
+> **Superseded:** this document describes the former V1/V2 architecture, which is no longer part of the active application. See the root `README.md` for the current architecture.
+
 # BLUSWAN V2 Architecture
 
 ## Core Principles

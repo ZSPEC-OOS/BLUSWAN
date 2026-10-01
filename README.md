@@ -1,124 +1,59 @@
 # BLUSWAN
 
-Build software at the speed of intent.
+A chat-first coding agent. The user describes a coding task in natural language; the agent runtime works against a repository through tools and continues naturally from follow-up messages in the same session.
 
-BLUSWAN is an AI-powered engineering workspace that combines a deterministic execution engine, bounded resource budgets, and integrated tooling into one browser-first experience. Plan changes, execute code edits, validate quality, and ship with confidence.
+> **Status:** Foundation (Phase 1). The session protocol, provider abstraction, DeepSeek adapter, agent-runtime skeleton and chat client are implemented. Repository tools, file editing, command execution and the autonomous tool loop are **not** implemented yet; the runtime currently streams a model response for each user message.
 
----
+## Architecture
 
-## What's New in V2
+```text
+User message → Session → Agent runtime → Model provider → (tool calls) → Workspace
+```
 
-V2 replaces the V1 nested-loop architecture with structural guarantees:
-
-| Concern | V1 | V2 |
+| Layer | Path | Responsibility |
 |---|---|---|
-| Loop prevention | Heuristics (30% infinite-loop rate) | Forward-only 11-phase Task State Machine — loops structurally impossible |
-| Token waste | ~40% on auto-repair loops | ≤10% — remediation budget makes repair costs explicit |
-| Context management | 10 competing injectors, silent pruning | Reserved tiers + `ContextBudgetError` — no silent drops |
-| Error handling | 1,400-line auto-repair engine, hidden retries | Classify-only `errorClassifier.js` — LLM decides fix strategy |
-| Quality checks | Uniform hard gates — any warning blocks shipping | Gates (blocking) + signals (non-blocking, reported) |
-| Observability | Final outcome only | Full telemetry trace — every event, budget spend, and phase transition |
+| Protocol | `src/protocol/` | Canonical event types, message/session/error schemas |
+| Sessions | `src/sessions/` | Session manager (live state, subscribers) and a pluggable store (in-memory today) |
+| Providers | `src/providers/` | One normalized adapter interface, registry, neutral stream events; `deepseek.js` is the initial adapter |
+| Agent | `src/agent/` | Provider-neutral runtime, agent state, stop conditions, canonical system prompt |
+| Client | `src/client/` | React surface: renders session state and forwards user intent |
+| Config | `src/config/runtimeConfig.js` | Provider, model, limits, timeouts, logging; secrets come from the environment |
 
-V1 routing is preserved. The V2 engine is opt-in via feature flags and does not affect existing integrations.
+**Runtime/client separation.** React renders sessions, messages and runtime events and submits user messages. It does not call providers, run tools, parse provider responses or decide task completion; the runtime owns all of that and is usable without React.
 
----
+**Provider abstraction.** Provider-specific behavior (endpoints, auth, streaming format, tool schemas, error mapping) lives only in adapters. Adapters expose capabilities and emit provider-neutral events (`text_delta`, `reasoning_status`, `tool_call`, `usage`, `completed`); failures are normalized to `{ code, message, provider, retryable, cause }`.
 
-## Quick Start
+**Sessions.** A session holds normalized messages, events, tool calls, changed files, status, and token usage. Statuses: `idle`, `running`, `waiting_permission`, `waiting_user`, `completed`, `error`, `cancelled`. Cancellation propagates through an `AbortController` to the provider request.
+
+## Quick start
 
 ```bash
 npm install
+cp .env.example .env     # set VITE_DEEPSEEK_API_KEY and VITE_DEEPSEEK_MODEL
 npm run dev
 ```
 
-Open `http://localhost:5173` and sign in via the Firebase Auth prompt.
-
-Configure your AI provider in **Settings → AI Provider**.
-
-To enable the V2 engine, add `?v2=true` to the URL. To enable the V2 UI as well, use `?v2=true&v2ui=true`.
-
----
-
-## Feature Flags
-
-| URL param | Effect |
+| Variable | Purpose |
 |---|---|
-| `?v2=true` | Routes tasks through the V2 state machine |
-| `?v2ui=true` | Enables the V2 task lanes, budget bar, and telemetry panel |
-| `?v2=true&v2ui=true` | Full V2 experience |
+| `VITE_DEEPSEEK_API_KEY` | DeepSeek API key (required) |
+| `VITE_DEEPSEEK_MODEL` | DeepSeek model identifier (required; no default is assumed) |
+| `VITE_DEEPSEEK_BASE_URL` | API base URL (default `https://api.deepseek.com`) |
 
-Flags can also be set persistently in `localStorage`:
+Browser-side execution is temporary: any `VITE_*` value is exposed to the client bundle, so do not ship a production key this way. The adapter takes its configuration by injection so execution can move server-side without changing the provider interface.
 
-```javascript
-localStorage.setItem('bluswan_v2_engine', 'true');
-localStorage.setItem('bluswan_v2_ui', 'true');
-```
+## Scripts
 
----
-
-## Core Architecture (V2)
-
-### Task State Machine
-
-Every task moves forward through 11 phases:
-
-```
-idle → planning → plan_review → cycle_prep → cycle_exec
-     → cycle_validate → [repeat] → completion_check
-     → completion_confirm → done | failed | halted
-```
-
-Phases are forward-only. No phase can be revisited. The plan is immutable after `plan_review`. Hard caps: max 3 cycles, max 25 turns per cycle (both configurable).
-
-### Bounded Remediation
-
-Each task has a 100-unit remediation budget. Every fix attempt costs units:
-
-| Action | Cost |
+| Command | Purpose |
 |---|---|
-| `tool_retry` | 5 |
-| `test_re_run` | 10 |
-| `lint_re_run` | 5 |
-| `model_re_call` | 20 |
-| `context_repack` | 15 |
+| `npm run dev` | Start the dev server |
+| `npm run build` | Production build |
+| `npm run lint` | ESLint |
+| `npm test` | Unit tests (no network or API key required) |
 
-When the budget is exhausted, the task completes with quality warnings rather than failing. The full audit trail is in `TaskResult.remediationBudget.auditTrail`.
+## Planned
 
-### Context Budget
+A workspace/tool layer (file read/search/edit, command execution, validation) and additional providers are planned for later phases and are not part of the current code.
 
-Context is assembled in priority-ordered tiers. Reserved space is inviolable:
+## Legacy code
 
-- System prompt: 2,000 tokens
-- Plan contract: 1,500 tokens
-- Completion protocol: 500 tokens
-- Safety buffer: 1,000 tokens
-
-Overflow throws `ContextBudgetError` — no silent pruning that drops the task goal.
-
----
-
-## CLI
-
-Headless operation for scripted and CI workflows:
-
-```bash
-node src/cli/bluswan-cli.mjs run "Refactor auth module to use async/await" --model=claude-3-5-sonnet-20241022
-```
-
----
-
-## Documentation
-
-| Document | Description |
-|---|---|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Full V2 architecture: state machine diagram, context budget tiers, quality pipeline |
-| [docs/api/public-api.md](docs/api/public-api.md) | Stable public API reference (`runTask`, `createPlanContract`, all types) |
-| [docs/contributing/getting-started.md](docs/contributing/getting-started.md) | Setup, project structure, feature flags, adding tools and quality signals |
-| [docs/contributing/debugging.md](docs/contributing/debugging.md) | Telemetry export, event types, common failure modes |
-| [docs/adr/](docs/adr/) | Architecture Decision Records (5 ADRs covering V2 design decisions) |
-| [CHANGELOG.md](CHANGELOG.md) | Release history |
-
----
-
-## Deployment
-
-A `render.yaml` blueprint is included for static deployment workflows.
+`src/services/`, `src/core-v2/`, `src/services-v2/`, `src/components-v2/`, `src/components/`, `src/tools/`, `src/cli/` and `src/config/featureFlags.js` contain superseded V1/V2 code retained temporarily for later deletion. None of it is reachable from the application entry point. Documents under `docs/` describing V1/V2 are historical.

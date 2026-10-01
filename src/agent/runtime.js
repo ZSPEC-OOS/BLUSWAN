@@ -1,9 +1,11 @@
 // Provider-neutral agent runtime. Owns session execution; independent of React.
 //
-// Phase 1 flow: user message → provider stream → normalized events → idle.
-// There are no tools yet; the same path will carry them later.
+// Turn flow: user message → provider stream → normalized events → idle.
+// Tool infrastructure (Phase 2): executeTool() routes a tool call through
+// session → workspace → registry → executor. Providers do not drive tools yet;
+// the autonomous tool loop arrives in Phase 3.
 import { createEvent } from '../protocol/events.js'
-import { createError, isBluswanError } from '../protocol/schemas.js'
+import { createError, isBluswanError, newId } from '../protocol/schemas.js'
 import { createSessionManager } from '../sessions/sessionManager.js'
 import { defaultRegistry } from '../providers/registry.js'
 import { getRuntimeConfig, getDefaultModelRef } from '../config/runtimeConfig.js'
@@ -11,6 +13,10 @@ import { createAgentState, updateAgentState } from './agentState.js'
 import { composeStopConditions, maxTurns, userCancelled, unrecoverableError } from './stopConditions.js'
 import { buildSystemPrompt } from './systemPrompt.js'
 import { createLogger } from '../utils/logger.js'
+import { createDefaultToolRegistry } from '../tools/registry.js'
+import { createToolExecutor } from '../tools/executor.js'
+import { toolFailure } from '../tools/result.js'
+import { resolveLimits } from '../config/runtimeConfig.js'
 
 const log = createLogger('runtime')
 const SENDABLE = new Set(['idle', 'waiting_user', 'error'])
@@ -24,9 +30,16 @@ export function createAgentRuntime({
   providers = defaultRegistry,
   sessions = createSessionManager(),
   config = getRuntimeConfig(),
+  workspaces = null, // workspace manager; required for executeTool and workspace-bound sessions
+  tools = createDefaultToolRegistry(),
+  toolPolicy,
   now = () => Date.now(),
 } = {}) {
   const agents = new Map() // sessionId → agent state
+  const toolControllers = new Map() // sessionId → Set<AbortController> of in-flight tool calls
+  const toolExecutor = createToolExecutor({
+    registry: tools, policy: toolPolicy, limits: resolveLimits({}, config), now,
+  })
 
   const emit = (sessionId, type, data) =>
     sessions.appendEvent(sessionId, createEvent(type, sessionId, data, { timestamp: now() }))
@@ -49,6 +62,9 @@ export function createAgentRuntime({
   }
 
   function startSession({ workspaceId = null, model } = {}) {
+    if (workspaceId !== null && workspaces && !workspaces.getWorkspace(workspaceId)) {
+      throw new Error(`Unknown workspace: ${workspaceId}`)
+    }
     const session = sessions.create({ workspaceId, model: model ?? getDefaultModelRef(config) })
     agents.set(session.id, createAgentState(session.id, now()))
     emit(session.id, 'session.started', { model: session.model, workspaceId })
@@ -165,11 +181,68 @@ export function createAgentRuntime({
     return sessions.get(sessionId)
   }
 
+  function recordToolCall(sessionId, record) {
+    const calls = sessions.get(sessionId).toolCalls
+    const i = calls.findIndex(c => c.id === record.id)
+    sessions.update(sessionId, { toolCalls: i < 0 ? [...calls, record] : calls.map((c, k) => (k === i ? record : c)) })
+  }
+
+  /**
+   * Executes one tool call against the session's workspace and records it on the
+   * session. Resolves with the normalized tool result; tool failures never reject.
+   * @param {string} sessionId
+   * @param {{id?:string, name:string, input?:object}} call
+   */
+  async function executeTool(sessionId, call) {
+    const session = sessions.get(sessionId)
+    if (!session) throw new Error(`Unknown session: ${sessionId}`)
+    if (session.status === 'cancelled' || session.status === 'completed') {
+      throw new Error(`Session is ${session.status}; cannot execute tools`)
+    }
+    if (!call || typeof call.name !== 'string') throw new Error('Tool call requires a name')
+    const id = call.id ?? `tool_${newId()}`
+    const input = call.input ?? {}
+    const startedAt = now()
+    const record = { id, name: call.name, input, result: null, status: 'running', startedAt, completedAt: null }
+
+    const workspace = session.workspaceId && workspaces ? workspaces.getWorkspace(session.workspaceId) : null
+    recordToolCall(sessionId, record)
+    if (!workspace) {
+      const result = { ...toolFailure(call.name, 'workspace_not_found',
+        session.workspaceId ? `Workspace not found: ${session.workspaceId}` : 'Session has no workspace'), toolCallId: id, durationMs: 0 }
+      emit(sessionId, 'tool.started', { toolCallId: id, tool: call.name })
+      emit(sessionId, 'tool.failed', { toolCallId: id, tool: call.name, durationMs: 0, error: result.error })
+      recordToolCall(sessionId, { ...record, result, status: 'failed', completedAt: now() })
+      return result
+    }
+
+    const controller = new AbortController()
+    if (!toolControllers.has(sessionId)) toolControllers.set(sessionId, new Set())
+    toolControllers.get(sessionId).add(controller)
+    try {
+      const result = await toolExecutor.execute({
+        workspace, call: { id, name: call.name, input }, signal: controller.signal,
+        emit: (type, data) => {
+          emit(sessionId, type, data)
+          if (type === 'file.changed') {
+            const files = sessions.get(sessionId).changedFiles
+            if (!files.includes(data.path)) sessions.update(sessionId, { changedFiles: [...files, data.path] })
+          }
+        },
+      })
+      recordToolCall(sessionId, { ...record, result, status: result.ok ? 'completed' : 'failed', completedAt: now() })
+      return result
+    } finally {
+      toolControllers.get(sessionId)?.delete(controller)
+    }
+  }
+
   /** Aborts any in-flight provider request and ends the session as cancelled. */
   function cancelSession(sessionId) {
     const session = sessions.get(sessionId)
     if (!session) throw new Error(`Unknown session: ${sessionId}`)
     if (session.status === 'cancelled') return session
+    for (const c of toolControllers.get(sessionId) ?? []) c.abort()
     const controller = agents.get(sessionId)?.abortController
     if (controller) {
       controller.abort() // the in-flight turn finalizes the cancellation
@@ -191,6 +264,8 @@ export function createAgentRuntime({
     sendMessage,
     cancelSession,
     completeSession,
+    executeTool,
+    listTools: () => tools.describeTools(),
     getSession: (id) => sessions.get(id),
     listProviders: () => providers.listProviders(),
     /** @param {(event:object, session:object)=>void} listener */

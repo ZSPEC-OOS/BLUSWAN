@@ -11,6 +11,27 @@ const DEFAULTS = Object.freeze({
   devLogging: false,
 })
 
+/** Workspace/tool limits. Override per key with VITE_BLUSWAN_LIMIT_<SNAKE_CASE_NAME>. */
+export const DEFAULT_LIMITS = Object.freeze({
+  maxReadBytes: 64_000,
+  maxFileBytes: 10_000_000,
+  maxReadManyFiles: 20,
+  maxReadManyBytes: 200_000,
+  maxWriteBytes: 2_000_000,
+  maxPatchBytes: 1_000_000,
+  maxGrepResults: 200,
+  maxGrepFileBytes: 1_000_000,
+  maxGrepLineLength: 500,
+  maxSearchResults: 100,
+  maxShellOutputBytes: 100_000,
+  maxDiffBytes: 200_000,
+  maxDirectoryDepth: 5,
+  maxDirectoryEntries: 1000,
+  maxIndexedFiles: 50_000,
+  defaultShellTimeoutMs: 120_000,
+  maxShellTimeoutMs: 600_000,
+})
+
 function readEnv() {
   try { if (import.meta.env) return import.meta.env } catch {}
   return typeof process !== 'undefined' ? process.env : {}
@@ -26,6 +47,11 @@ function int(value, fallback) {
  * Per-provider settings live under `providers[providerId]`.
  */
 export function loadRuntimeConfig(env = readEnv()) {
+  const limits = {}
+  for (const [key, fallback] of Object.entries(DEFAULT_LIMITS)) {
+    const envKey = `VITE_BLUSWAN_LIMIT_${key.replace(/[A-Z]/g, c => `_${c}`).toUpperCase()}`
+    limits[key] = int(env[envKey], fallback)
+  }
   const deepseekModel = env.VITE_DEEPSEEK_MODEL || ''
   return Object.freeze({
     defaultProvider: env.VITE_BLUSWAN_PROVIDER || DEFAULTS.defaultProvider,
@@ -35,6 +61,7 @@ export function loadRuntimeConfig(env = readEnv()) {
     streamTimeoutMs: int(env.VITE_BLUSWAN_STREAM_TIMEOUT_MS, DEFAULTS.streamTimeoutMs),
     maxOutputTokens: int(env.VITE_BLUSWAN_MAX_OUTPUT_TOKENS, DEFAULTS.maxOutputTokens),
     temperature: DEFAULTS.temperature,
+    limits: Object.freeze(limits),
     devLogging: env.VITE_BLUSWAN_DEV_LOGGING === 'true' || !!env.DEV,
     providers: Object.freeze({
       deepseek: Object.freeze({
@@ -69,4 +96,9 @@ export function redactConfig(config = getRuntimeConfig()) {
     providers[id] = { ...p, apiKey: p.apiKey ? '[redacted]' : '' }
   }
   return { ...config, providers }
+}
+
+/** Merges explicit overrides over the configured (or default) limits. */
+export function resolveLimits(overrides = {}, config = getRuntimeConfig()) {
+  return Object.freeze({ ...DEFAULT_LIMITS, ...(config.limits ?? {}), ...overrides })
 }

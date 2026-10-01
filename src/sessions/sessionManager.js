@@ -33,6 +33,8 @@ export function createSessionManager({ store = createInMemorySessionStore(), now
       return write(createSession({ workspaceId, model, id, now: now() }))
     },
 
+    createSession(init) { return this.create(init) },
+
     /** Loads a persisted session into the live set. */
     async restore(id) {
       const s = await store.loadSession(id)

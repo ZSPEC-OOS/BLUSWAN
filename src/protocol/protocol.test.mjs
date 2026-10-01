@@ -30,7 +30,7 @@ describe('event protocol', () => {
     assert.equal(isValidEvent(null), false)
   })
   it('supports every required event type', () => {
-    assert.equal(EVENT_TYPES.length, 19)
+    assert.equal(EVENT_TYPES.length, 20)
     for (const t of EVENT_TYPES) assert.ok(isValidEvent(createEvent(t, 's1')))
   })
 })

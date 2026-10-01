@@ -1,7 +1,8 @@
 // Normalized tool result construction and input summarization for telemetry.
 import { WorkspaceError, TOOL_ERROR_CODES } from '../workspace/errors.js'
+import { redactSecrets } from '../utils/redact.js'
 
-export { TOOL_ERROR_CODES }
+export { TOOL_ERROR_CODES, redactSecrets }
 /** Tool implementations throw this to report a structured failure. */
 export { WorkspaceError as ToolError }
 
@@ -17,14 +18,6 @@ export function toolFailure(tool, code, message, { details = null, output = null
   return createToolResult({
     tool, ok: false, output, error: { code, message: String(message).slice(0, 2000), ...(details ? { details } : {}) }, ...extra,
   })
-}
-
-const SECRET_ASSIGN = /\b([A-Za-z_][A-Za-z0-9_]*(?:KEY|SECRET|TOKEN|PASSWORD|PASSWD)[A-Za-z0-9_]*)=\S+/gi
-const SECRET_FLAG = /(--?(?:token|password|passwd|secret|api-key|apikey)[= ])\S+/gi
-const BEARER = /(Bearer\s+)\S+/gi
-
-export function redactSecrets(text) {
-  return text.replace(SECRET_ASSIGN, '$1=[redacted]').replace(SECRET_FLAG, '$1[redacted]').replace(BEARER, '$1[redacted]')
 }
 
 /**

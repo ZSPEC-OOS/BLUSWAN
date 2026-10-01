@@ -87,7 +87,7 @@ describe('tool executor + tools', () => {
       assert.equal(r.error.message, 'File not found: nope.js')
     })
     it('rejects unknown tools and invalid input', async () => {
-      await fail('run_command', { command: 'ls' }, 'tool_not_found')
+      await fail('run_command', { command: 'ls' }, 'unknown_tool')
       await fail('read_file', {}, 'invalid_input')
       await fail('read_file', { path: 'a', extra: true }, 'invalid_input')
       await fail('read_file', { path: 5 }, 'invalid_input')
@@ -107,13 +107,14 @@ describe('tool executor + tools', () => {
       await run('write_file', { path: 'a.txt', content: 'x' })
       await run('delete_file', { path: 'a.txt' })
       await fail('delete_file', { path: 'a.txt' }, 'file_not_found')
-      const changed = events.filter(e => e.type === 'file.changed').map(e => [e.data.path, e.data.change])
+      const changed = events.filter(e => e.type === 'file.changed').map(e => [e.data.path, e.data.action])
       assert.deepEqual(changed, [['a.txt', 'created'], ['a.txt', 'deleted']])
     })
     it('denies commands the policy does not allow, without running them', async () => {
-      const r = await fail('shell', { command: 'git push origin main' }, 'permission_denied')
+      const r = await fail('shell', { command: 'git push origin main' }, 'permission_required')
       assert.equal(r.metadata.effect, 'external_effect')
-      await fail('shell', { command: 'npm install left-pad' }, 'permission_denied')
+      await fail('shell', { command: 'npm install left-pad' }, 'permission_required')
+      await fail('shell', { command: 'rm -rf build' }, 'permission_required')
       await fail('shell', { command: 'rm -rf /' }, 'permission_denied')
       await fail('shell', { command: 'touch pwned && sudo true' }, 'permission_denied')
       assert.equal(await ws.exists('pwned'), false)
@@ -252,10 +253,12 @@ describe('tool executor + tools', () => {
       assert.deepEqual([r.ok, r.output.exitCode, r.output.stdout.trim(), r.output.stderr.trim(), r.output.timedOut], [true, 0, 'out', 'err', false])
       assert.equal(r.metadata.effect, 'read')
     })
-    it('reports non-zero exit as command_failed while keeping output', async () => {
-      const r = await fail('shell', { command: 'echo partial; exit 4' }, 'command_failed')
+    it('reports non-zero exit as an observation, not a tool failure', async () => {
+      const r = await run('shell', { command: 'echo partial; exit 4' })
+      assert.equal(r.ok, true)
       assert.equal(r.output.exitCode, 4)
       assert.equal(r.output.stdout.trim(), 'partial')
+      assert.equal(events.at(-1).type, 'tool.completed')
     })
     it('times out', async () => {
       const r = await fail('shell', { command: 'sleep 30', timeoutMs: 200 }, 'command_timeout')

@@ -16,6 +16,9 @@ export const maxEffect = (a, b) => (RANK[a] >= RANK[b] ? a : b)
  */
 export const DEFAULT_POLICY = Object.freeze({
   allowedEffects: Object.freeze(['read', 'workspace_write', 'destructive']),
+  // Shell commands are classified per call; destructive commands need approval even though the
+  // dedicated delete_file tool (single files only) does not.
+  allowedCommandEffects: Object.freeze(['read', 'workspace_write']),
 })
 
 // ─── Shell command classification ────────────────────────────────────────────
@@ -218,8 +221,9 @@ export function classifyCommand(command, depth = 0) {
  * Decides whether a classified effect may run under `policy`.
  * @returns {{allowed:boolean, effect:string, reason:string|null}}
  */
-export function checkPermission(effect, reason, policy = DEFAULT_POLICY) {
-  if (effect === 'prohibited') return { allowed: false, effect, reason: reason ?? 'prohibited operation' }
-  if (policy.allowedEffects.includes(effect)) return { allowed: true, effect, reason: null }
-  return { allowed: false, effect, reason: `${effect} operations require approval, which is not available: ${reason ?? ''}`.trim() }
+export function checkPermission(effect, reason, policy = DEFAULT_POLICY, { classified = false } = {}) {
+  if (effect === 'prohibited') return { allowed: false, prohibited: true, effect, reason: reason ?? 'prohibited operation' }
+  const allowed = classified ? (policy.allowedCommandEffects ?? policy.allowedEffects) : policy.allowedEffects
+  if (allowed.includes(effect)) return { allowed: true, effect, reason: null }
+  return { allowed: false, prohibited: false, effect, reason: `This command requires user approval (${effect}): ${reason ?? ''}`.trim() }
 }

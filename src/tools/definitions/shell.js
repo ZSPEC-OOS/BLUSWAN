@@ -3,7 +3,7 @@ import { classifyCommand } from '../permissions.js'
 
 export const shell = {
   name: 'shell',
-  description: 'Run a shell command from the workspace root. Returns exit code, stdout and stderr. Subject to a timeout and output limits.',
+  description: 'Run a shell command from the workspace root. Returns exit code, stdout and stderr (a non-zero exit is reported, not an error). Subject to a timeout and output limits.',
   permission: 'workspace_write',
   inputSchema: {
     type: 'object',
@@ -23,9 +23,7 @@ export const shell = {
     const result = await workspace.runCommand(command, { timeoutMs, env, signal })
     if (result.cancelled) throw new ToolError('command_cancelled', 'Command was cancelled', { output: result })
     if (result.timedOut) throw new ToolError('command_timeout', `Command timed out after ${result.durationMs}ms`, { output: result })
-    if (result.exitCode !== 0) {
-      throw new ToolError('command_failed', `Command exited with ${result.exitCode ?? `signal ${result.signal}`}`, { output: result })
-    }
+    // A non-zero exit is an observation (e.g. failing tests), not a tool failure: the command ran.
     return result
   },
 }

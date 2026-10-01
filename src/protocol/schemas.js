@@ -1,6 +1,8 @@
 // Canonical BLUSWAN data schemas: messages, sessions, normalized errors.
 // Nothing in this module is provider-specific.
 
+import { redactSecrets } from '../utils/redact.js'
+
 export const MESSAGE_ROLES = Object.freeze(['system', 'user', 'assistant', 'tool'])
 
 export const SESSION_STATUSES = Object.freeze([
@@ -22,6 +24,11 @@ export const ERROR_CODES = Object.freeze([
   'cancelled',
   'invalid_response',
   'runtime_error',
+  'provider_timeout',
+  'session_busy',
+  'max_turns',
+  'loop_detected',
+  'no_progress',
 ])
 
 export function newId() {
@@ -37,7 +44,7 @@ export function newId() {
 /** @returns {BluswanError} */
 export function createError({ code, message, provider = null, retryable = false, cause } = {}) {
   if (!ERROR_CODES.includes(code)) throw new Error(`Unknown error code: ${code}`)
-  return { code, message: String(message ?? code), provider, retryable: !!retryable, cause: serializeCause(cause) }
+  return { code, message: redactSecrets(message ?? code), provider, retryable: !!retryable, cause: serializeCause(cause) }
 }
 
 export function isBluswanError(value) {
@@ -48,14 +55,14 @@ export function isBluswanError(value) {
 // Causes are reduced to plain data so errors can be persisted and rendered safely.
 function serializeCause(cause) {
   if (cause === undefined || cause === null) return null
-  if (cause instanceof Error) return { name: cause.name, message: cause.message }
+  if (cause instanceof Error) return { name: cause.name, message: redactSecrets(cause.message) }
   if (typeof cause === 'object') return cause
-  return { message: String(cause) }
+  return { message: redactSecrets(cause) }
 }
 
 // ─── Messages ─────────────────────────────────────────────────────────────────
 
-export function createMessage({ role, content, toolCalls, toolCallId, id, timestamp } = {}) {
+export function createMessage({ role, content, toolCalls, toolCallId, name, reasoning, id, timestamp } = {}) {
   if (!MESSAGE_ROLES.includes(role)) throw new Error(`Invalid message role: ${role}`)
   if (typeof content !== 'string') throw new Error('Message content must be a string')
   return {
@@ -65,6 +72,8 @@ export function createMessage({ role, content, toolCalls, toolCallId, id, timest
     timestamp: timestamp ?? Date.now(),
     ...(toolCalls ? { toolCalls } : {}),
     ...(toolCallId ? { toolCallId } : {}),
+    ...(name ? { name } : {}),
+    ...(reasoning ? { reasoning } : {}),
   }
 }
 
@@ -88,9 +97,10 @@ export function createSession({ workspaceId = null, model, id, now = Date.now() 
     events: [],
     toolCalls: [],
     changedFiles: [],
+    turns: [],
     status: 'idle',
     contextSummary: null,
-    tokenUsage: { input: 0, output: 0, total: 0 },
+    tokenUsage: { input: 0, output: 0, reasoning: 0, total: 0 },
     startedAt: now,
     updatedAt: now,
   }

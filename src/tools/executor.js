@@ -12,7 +12,8 @@ import { resolveLimits } from '../config/runtimeConfig.js'
  */
 export function createToolExecutor({ registry, policy = DEFAULT_POLICY, limits = resolveLimits(), now = () => Date.now() }) {
   /**
-   * @param {{workspace:object, call:{id?:string,name:string,input?:object}, signal?:AbortSignal,
+   * `call.preflightError` ({code,message}) short-circuits execution with that failure (malformed model output, loop guard).
+   * @param {{workspace:object, call:{id?:string,name:string,input?:object,preflightError?:object}, signal?:AbortSignal,
    *          emit?:(type:string,data:object)=>void}} args
    * @returns {Promise<object>} normalized tool result (never throws for tool failures)
    */
@@ -40,15 +41,16 @@ export function createToolExecutor({ registry, policy = DEFAULT_POLICY, limits =
     emit('tool.started', { toolCallId, tool: name, inputSummary })
 
     const tool = registry.getTool(name)
-    if (!tool) return finish(toolFailure(name, 'tool_not_found', `Unknown tool: ${name}`))
+    if (!tool) return finish(toolFailure(name, 'unknown_tool', `Unknown tool: ${name}. Available tools: ${registry.listTools().map(t => t.name).join(', ')}`))
+    if (call.preflightError) return finish(toolFailure(name, call.preflightError.code, call.preflightError.message))
 
     const validation = validateInput(tool.inputSchema, input)
     if (!validation.ok) return finish(toolFailure(name, 'invalid_input', validation.errors.join('; ')))
 
     const classified = tool.classify ? tool.classify(input) : { effect: tool.permission, reason: null }
-    const decision = checkPermission(classified.effect, classified.reason, policy)
+    const decision = checkPermission(classified.effect, classified.reason, policy, { classified: !!tool.classify })
     if (!decision.allowed) {
-      return finish(toolFailure(name, 'permission_denied', decision.reason, {
+      return finish(toolFailure(name, decision.prohibited ? 'permission_denied' : 'permission_required', decision.reason, {
         details: { effect: decision.effect }, metadata: { effect: decision.effect },
       }))
     }
@@ -57,9 +59,8 @@ export function createToolExecutor({ registry, policy = DEFAULT_POLICY, limits =
     try {
       const output = await tool.execute({ workspace, signal, limits: workspace.metadata?.limits ?? limits, toolCallId }, input)
       const changes = tool.changes ? tool.changes(output) : []
-      const result = finish(createToolResult({ tool: name, ok: true, output, metadata }))
-      for (const c of changes) emit('file.changed', { toolCallId, tool: name, path: c.path, change: c.change })
-      return result
+      for (const c of changes) emit('file.changed', { toolCallId, tool: name, path: c.path, action: c.change })
+      return finish(createToolResult({ tool: name, ok: true, output, metadata }))
     } catch (e) {
       if (isWorkspaceError(e)) {
         return finish(toolFailure(name, e.code, e.message, { details: e.details, output: e.output, metadata }))

@@ -2,14 +2,17 @@
 
 A chat-first coding agent. The user describes a coding task in natural language; the agent runtime works against a repository through tools and continues naturally from follow-up messages in the same session.
 
-> **Status:** Phase 2 (workspace and tools). On top of the Phase 1 foundation (session protocol, provider abstraction, DeepSeek adapter, runtime, chat client), BLUSWAN now has a workspace abstraction, a local-filesystem workspace, and eleven canonical coding tools (read, search, patch, write, delete, shell, git). **These tools are available programmatically only** (`runtime.executeTool`). The provider-driven tool loop — the model choosing and calling tools autonomously — arrives in Phase 3; today the runtime still just streams a model response for each user message.
+> **Status:** Phase 3 (autonomous agent loop). The runtime now drives DeepSeek through a single tool loop: the model inspects the repository, edits with `apply_patch`, runs commands, observes results, adapts, and answers. DeepSeek is the **only** production provider; the runtime is provider-neutral, but no other provider is implemented. Context management/compaction, deterministic validation gates, a permission-approval UI and rich diff/terminal UI are not implemented yet.
 
 ## Architecture
 
 ```text
-User message → Session → Agent runtime → Model provider            (Phase 1, live)
-                              └─ executeTool → Tool executor → Tool registry → Workspace
-                                                                       (Phase 2, programmatic)
+user message
+  → agent runtime ──► provider adapter (DeepSeek) ──► streamed text + normalized tool calls
+        ▲                                                       │
+        │ normalized tool results (role: tool)                  ▼
+        └──────────── tool executor → tool registry → workspace (files · search · shell · git)
+  → final assistant response (a response with no tool calls ends the run)
 ```
 
 | Layer | Path | Responsibility |
@@ -29,13 +32,77 @@ User message → Session → Agent runtime → Model provider            (Phase 
 
 **Sessions.** A session holds normalized messages, events, tool calls, changed files, status, and token usage. Statuses: `idle`, `running`, `waiting_permission`, `waiting_user`, `completed`, `error`, `cancelled`. Cancellation propagates through an `AbortController` to the provider request.
 
+## Agent loop (Phase 3)
+
+`src/agent/runtime.js` owns the one canonical loop. React, the provider adapter and the workspace each own only their own concern.
+
+```text
+sendMessage(sessionId, text)
+  validate (provider, model, credentials, workspace) — before any network request
+  repeat:
+    stop check            cancelled · max turns · no progress
+    provider turn         stream one response → text deltas, tool calls, usage        (retry only if nothing was shown)
+    commit                assistant message {content, toolCalls}; trace + usage
+    no tool calls?        → status completed, session.completed
+    execute tool calls    read-only calls run concurrently, everything else in emitted order
+    append tool results   one `tool` message per call; loop guard; next turn
+```
+
+**Turn.** One provider response is one turn, together with the tool calls it requested and their results. `maxTurns` (default 25) applies per run; exceeding it stops the run with a grounded assistant notice and a `max_turns` error, keeping all work done so far.
+
+**Lifecycle.** The run lifecycle is `idle → running → completed | cancelled | error`; the conversation is separate and always continues: every one of those end states accepts the next user message in the same session, with the same workspace, messages, tool history and file changes. A second `sendMessage` while a run is active is rejected with a normalized `session_busy` error. A new conversation is a new session (fresh messages, turns and counters).
+
+**Messages.** The canonical history holds `user`, `assistant` (`content` + `toolCalls: [{id, name, input}]`, plus provider reasoning kept only for continuation and never rendered) and `tool` (`toolCallId`, `name`, deterministic plain-text `content`) messages. Tool results are serialized as `Tool / Status / …` text (read_file shows the content, shell shows `Exit code`, STDOUT, STDERR; bounded by the Phase 2 limits plus a final `maxToolResultChars` cap). Each response's text and tool calls are committed together, before any tool runs, and every tool call always receives a result (including skipped or cancelled ones) so the history stays valid for the provider.
+
+**Tool errors are observations.** Unknown tools (`unknown_tool`), malformed or invalid arguments (`invalid_input`), missing files and refused commands (`permission_required`, `permission_denied`) are returned to the model, which can correct itself. A shell command that exits non-zero is a successful tool call whose result shows the exit code. Only infrastructure failures end a run. Commands classified `dependency_change`, `external_effect` or `destructive` are not executed without approval (no approval UI yet); there is no commit, push or PR tooling.
+
+**Safety rails.** Three identical consecutive tool calls (same name and arguments) get a corrective `loop_detected` observation instead of being executed; a further repeat ends the run. Six consecutive turns in which every tool call failed end the run (`no_progress`). Both are small and configurable (`maxIdenticalToolCalls`, `maxFailedTurns`).
+
+**Cancellation.** `runtime.cancelSession(id)` aborts the in-flight provider request and any running tool; shell process trees are killed. Completed edits are kept (nothing is reverted), unexecuted tool calls are recorded as cancelled, partial streamed text is kept, `session.cancelled` is emitted, and the session accepts another message.
+
+**Transport reliability.** Retries wrap a single provider request: up to `maxTransportRetries` (default 2) with exponential backoff and jitter, only for retryable failures (429, 5xx, connection errors, request timeouts) and only while nothing from the attempt has been shown (a failure after content started streaming is reported, not replayed). Authentication, invalid-request and cancelled failures are never retried. Each retry emits `provider.retry {attempt, reason, delayMs}`. A request timeout (`requestTimeoutMs`, until response headers) and a stream-inactivity timeout (`streamTimeoutMs`) both yield a normalized `provider_timeout`. Errors are scrubbed of API keys and bearer tokens before they reach events or history.
+
+**DeepSeek adapter.** `src/providers/deepseek.js` is the only place that knows the DeepSeek wire format: it converts canonical messages/tools to chat-completions requests (tool schemas come from the tool registry; nothing is duplicated), parses the SSE stream into neutral events (`text_delta`, `reasoning_delta`, `tool_call_start/delta/complete`, `usage`, `completed`), reassembles fragmented tool arguments, and maps HTTP/stream failures to normalized errors. In thinking mode it echoes the model's reasoning back only on tool-call turns of the current exchange; this continuation behavior follows the documented API but has not been verified against the live service (see the smoke test).
+
+**Events and trace.** A typical run emits `user.message`, `session.updated`, `assistant.text.delta`*, `assistant.text.completed`, then per tool `tool.started`, `file.changed`, `tool.completed|failed`, and finally `session.completed` (or `session.cancelled` / `session.failed`). `session.turns` holds `{turn, startedAt, completedAt, provider, model, toolCalls, usage, finishReason}` per turn; `session.tokenUsage` aggregates `{input, output, reasoning, total}`; `session.toolCalls` records `{id, name, input, status, resultSummary, startedAt, completedAt}`; `session.changedFiles` holds `{path, action}` (latest action wins).
+
+```js
+const workspaces = createNodeWorkspaceManager()
+const runtime = createAgentRuntime({ workspaces })
+const ws = await workspaces.openWorkspace({ root: '/path/to/repo' })
+const session = runtime.createSession({ workspaceId: ws.id, model: { provider: 'deepseek', model: process.env.DEEPSEEK_MODEL } })
+runtime.subscribe(session.id, event => render(event))
+await runtime.sendMessage(session.id, 'Fix the failing parser test.')
+runtime.cancelSession(session.id) // from another handler: Stop
+```
+
+Illustrative output format (tool lines are derived from runtime events by the CLI and web client; the content shown is an example, not a recorded run):
+
+```text
+> Fix the failing parser test.
+▸ Finding files "parser"
+▸ Reading 2 files
+▸ Applying patch
+  modified src/parser.js
+▸ Running npm test -- parser
+Fixed the parser's empty-token handling; `npm test -- parser` now passes.
+```
+
+**Running it.** The browser has no filesystem access, so the web client renders any runtime it is given but, without a workspace, offers no repository tools (it says so). To run the agent against a local repository use the terminal host:
+
+```bash
+DEEPSEEK_API_KEY=... DEEPSEEK_MODEL=... npm run agent -- --workspace ../my-repo "Fix the failing parser test"
+```
+
+Ctrl-C stops the run and keeps completed edits. `npm run test:deepseek` is an optional live smoke test (needs `DEEPSEEK_API_KEY` and `DEEPSEEK_MODEL`; uses a disposable temp repository; not part of `npm test`).
+
 ## Workspace and tools (Phase 2)
 
 ```text
 Agent runtime → Tool executor → Tool registry → Workspace manager → LocalWorkspace → files · search · shell · git
 ```
 
-The model never touches Node, the shell, GitHub, or legacy executors: it requests a normalized tool, the executor validates and permission-checks it, and the workspace performs it. No API key or network is needed to exercise any of this.
+The model never touches Node, the shell, GitHub, or legacy executors: it requests a normalized tool, the executor validates and permission-checks it, and the workspace performs it. No API key or network is needed to exercise the tools directly with `runtime.executeTool`; the model-driven loop above uses the same path.
 
 **Workspace abstraction.** `src/workspace/workspace.js` defines the contract (`readFile`, `writeFile`, `deleteFile`, `listDirectory`, `searchFiles`, `grep`, `applyPatch`, `runCommand`, `gitStatus`, `gitDiff`, `exists`, `stat`) plus `id`, `root`, and `metadata` (repository info and an opening baseline of `branch`, `headSha`, `initialStatus`). The tool layer depends only on this contract.
 
@@ -90,9 +157,11 @@ npm run dev
 
 | Variable | Purpose |
 |---|---|
-| `VITE_DEEPSEEK_API_KEY` | DeepSeek API key (required) |
-| `VITE_DEEPSEEK_MODEL` | DeepSeek model identifier (required; no default is assumed) |
-| `VITE_DEEPSEEK_BASE_URL` | API base URL (default `https://api.deepseek.com`) |
+| `VITE_DEEPSEEK_API_KEY` (or `DEEPSEEK_API_KEY` in Node) | DeepSeek API key (required) |
+| `VITE_DEEPSEEK_MODEL` (or `DEEPSEEK_MODEL`) | DeepSeek model identifier (required; no default is assumed) |
+| `VITE_DEEPSEEK_BASE_URL` (or `DEEPSEEK_BASE_URL`) | API base URL (default `https://api.deepseek.com`) |
+
+Other runtime settings (`VITE_BLUSWAN_MAX_TURNS`, `…_MAX_TRANSPORT_RETRIES`, `…_REQUEST_TIMEOUT_MS`, `…_STREAM_TIMEOUT_MS`, `VITE_BLUSWAN_LIMIT_*`) live in `src/config/runtimeConfig.js`.
 
 Browser-side execution is temporary: any `VITE_*` value is exposed to the client bundle, so do not ship a production key this way. The adapter takes its configuration by injection so execution can move server-side without changing the provider interface.
 
@@ -104,12 +173,15 @@ Browser-side execution is temporary: any `VITE_*` value is exposed to the client
 | `npm run build` | Production build |
 | `npm run lint` | ESLint |
 | `npm test` | Unit and integration tests (no network or API key required) |
+| `npm run test:agent` | Agent loop, DeepSeek adapter (mocked wire), retries, cancellation, client activity |
+| `npm run agent -- --workspace DIR "request"` | Run the agent on a local repository from the terminal |
+| `npm run test:deepseek` | Optional live DeepSeek smoke test (requires credentials; not in `npm test`) |
 | `npm run test:workspace` | Workspace layer: path safety, patch engine, files, search, git, shell |
 | `npm run test:tools` | Tool registry/executor/permissions, every tool, and the Phase 2 acceptance test |
 
 ## Planned
 
-Not yet implemented: the provider-driven autonomous tool loop (Phase 3), context management, automatic validation, permission/approval and diff/terminal UI, additional providers, and Git push/PR flows.
+Not yet implemented: context management and compaction (Phase 4), automatic validation, permission/approval and diff/terminal UI, additional providers, and Git push/PR flows.
 
 ## Legacy code
 

@@ -38,6 +38,26 @@ export const DEFAULT_LIMITS = Object.freeze({
   maxShellTimeoutMs: 600_000,
 })
 
+/**
+ * Context-engine settings. Override per key with VITE_BLUSWAN_<SNAKE_CASE_NAME>
+ * (ratios as decimals, summarizeWithModel as "true").
+ */
+export const DEFAULT_CONTEXT = Object.freeze({
+  contextSafetyMarginTokens: 2000,
+  reservedOutputTokens: 0, // 0 = use maxOutputTokens (capped by the model's own limit)
+  compactionThresholdRatio: 0.78, // compact when projected input exceeds this share of the usable budget
+  compactionTargetRatio: 0.6, // ...and compact down to this share, so it doesn't re-run every turn
+  maxRepositoryContextTokens: 1500,
+  maxToolContextTokens: 24_000, // verbatim tool results kept once compaction is active
+  maxRecentConversationTokens: 16_000,
+  maxSummaryTokens: 2500,
+  maxFileSummaryTokens: 200,
+  maxInstructionTokens: 800,
+  maxRelevantFiles: 8,
+  minRecentExchanges: 2, // complete earlier exchanges kept verbatim before history is folded into the summary
+  summarizeWithModel: false, // optional model-assisted summary of folded history (never required)
+})
+
 function readEnv() {
   try { if (import.meta.env) return import.meta.env } catch {}
   return typeof process !== 'undefined' ? process.env : {}
@@ -58,6 +78,13 @@ function nonNegInt(value, fallback) {
  * Per-provider settings live under `providers[providerId]`.
  */
 export function loadRuntimeConfig(env = readEnv()) {
+  const context = {}
+  for (const [key, fallback] of Object.entries(DEFAULT_CONTEXT)) {
+    const raw = env[`VITE_BLUSWAN_${key.replace(/[A-Z]/g, c => `_${c}`).toUpperCase()}`]
+    if (typeof fallback === 'boolean') context[key] = raw === undefined ? fallback : raw === 'true'
+    else if (Number.isInteger(fallback)) context[key] = nonNegInt(raw, fallback)
+    else { const f = Number.parseFloat(raw); context[key] = Number.isFinite(f) && f > 0 && f <= 1 ? f : fallback }
+  }
   const limits = {}
   for (const [key, fallback] of Object.entries(DEFAULT_LIMITS)) {
     const envKey = `VITE_BLUSWAN_LIMIT_${key.replace(/[A-Z]/g, c => `_${c}`).toUpperCase()}`
@@ -78,6 +105,7 @@ export function loadRuntimeConfig(env = readEnv()) {
     maxFailedTurns: int(env.VITE_BLUSWAN_MAX_FAILED_TURNS, DEFAULTS.maxFailedTurns),
     temperature: DEFAULTS.temperature,
     limits: Object.freeze(limits),
+    ...context,
     devLogging: env.VITE_BLUSWAN_DEV_LOGGING === 'true' || !!env.DEV,
     providers: Object.freeze({
       deepseek: Object.freeze({
@@ -117,4 +145,12 @@ export function redactConfig(config = getRuntimeConfig()) {
 /** Merges explicit overrides over the configured (or default) limits. */
 export function resolveLimits(overrides = {}, config = getRuntimeConfig()) {
   return Object.freeze({ ...DEFAULT_LIMITS, ...(config.limits ?? {}), ...overrides })
+}
+
+/** Context settings with defaults filled in (callers may pass partial configs). */
+export function resolveContextConfig(config = getRuntimeConfig()) {
+  const out = { ...DEFAULT_CONTEXT }
+  for (const key of Object.keys(DEFAULT_CONTEXT)) if (config[key] !== undefined) out[key] = config[key]
+  out.maxOutputTokens = config.maxOutputTokens ?? DEFAULTS.maxOutputTokens
+  return out
 }

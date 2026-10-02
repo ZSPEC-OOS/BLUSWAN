@@ -24,6 +24,7 @@ const PROMPT = [
   '- write_file for new files or intentional full rewrites',
   '- shell for tests, lint, builds and development commands; a non-zero exit code is a result to read, not an error',
   '- git_status / git_diff to inspect workspace changes',
+  'Earlier parts of a long conversation may be summarized: the SESSION SUMMARY lists goals, decisions, changed files, validation results and unresolved issues. Treat it as accurate, honor its constraints, and re-read a file if you need its current content.',
   'Do not commit, push, or alter git history. Commands that need user approval will be refused; choose another approach or tell the user.',
 ].join('\n')
 

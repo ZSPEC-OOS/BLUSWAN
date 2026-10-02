@@ -3,7 +3,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-export const DEFAULT_IGNORE = Object.freeze(['.git', 'node_modules', 'dist', 'build', 'coverage', '.cache'])
+export const DEFAULT_IGNORE = Object.freeze(['.git', 'node_modules', 'dist', 'build', 'coverage', '.cache', 'vendor'])
 
 const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
 

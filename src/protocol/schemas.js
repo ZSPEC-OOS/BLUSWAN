@@ -29,6 +29,9 @@ export const ERROR_CODES = Object.freeze([
   'max_turns',
   'loop_detected',
   'no_progress',
+  'context_budget_exceeded',
+  'context_compaction_failed',
+  'context_invalid_history',
 ])
 
 export function newId() {
@@ -62,7 +65,7 @@ function serializeCause(cause) {
 
 // ─── Messages ─────────────────────────────────────────────────────────────────
 
-export function createMessage({ role, content, toolCalls, toolCallId, name, reasoning, id, timestamp } = {}) {
+export function createMessage({ role, content, toolCalls, toolCallId, name, reasoning, meta, id, timestamp } = {}) {
   if (!MESSAGE_ROLES.includes(role)) throw new Error(`Invalid message role: ${role}`)
   if (typeof content !== 'string') throw new Error('Message content must be a string')
   return {
@@ -74,6 +77,7 @@ export function createMessage({ role, content, toolCalls, toolCallId, name, reas
     ...(toolCallId ? { toolCallId } : {}),
     ...(name ? { name } : {}),
     ...(reasoning ? { reasoning } : {}),
+    ...(meta ? { meta } : {}),
   }
 }
 
@@ -101,6 +105,7 @@ export function createSession({ workspaceId = null, model, id, now = Date.now() 
     status: 'idle',
     contextSummary: null,
     tokenUsage: { input: 0, output: 0, reasoning: 0, total: 0 },
+    contextStats: { compactionCount: 0, lastCompactionAt: null, builds: 0, last: null },
     startedAt: now,
     updatedAt: now,
   }

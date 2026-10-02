@@ -1,5 +1,8 @@
 // Provider-neutral agent runtime. Owns session execution; independent of React.
 //
+// Every provider turn is built by the context engine (src/context): the runtime never sends raw
+// session history. Canonical session state is complete; the provider sees a bounded working view.
+//
 // One canonical loop:  user message → [ provider turn → tool calls → tool results ]* → final response.
 // One turn = one provider response (plus the tool calls it requested and their results).
 // The runtime never builds provider payloads or touches Node APIs: providers, tools and
@@ -14,7 +17,11 @@ import {
   composeStopConditions, maxTurns, userCancelled, noProgress, createLoopGuard,
 } from './stopConditions.js'
 import { buildSystemPrompt } from './systemPrompt.js'
-import { buildWorkspaceContext } from './workspaceContext.js'
+import { createContextEngine } from '../context/contextEngine.js'
+import { createProviderSummarizer } from '../context/compaction.js'
+import { createSessionSummary, observeUserMessage, observeToolResult } from '../context/sessionSummary.js'
+import { describeObservation } from '../context/toolContext.js'
+import { observeFileRead, invalidateFiles } from '../context/repositoryContext.js'
 import { runProviderTurn } from './providerTurn.js'
 import { executeToolCalls } from './toolScheduler.js'
 import { serializeToolResult, summarizeToolResult } from './toolResults.js'
@@ -50,6 +57,29 @@ export function createAgentRuntime({
   const toolControllers = new Map() // sessionId → Set<AbortController> for manual executeTool calls
   const limits = resolveLimits({}, config)
   const toolExecutor = createToolExecutor({ registry: tools, policy: toolPolicy, limits, now })
+  const contextEngine = createContextEngine({ config, now })
+  const observations = new WeakMap() // tool result → compact observation (stored on the tool message)
+
+  function updateSummary(sessionId, fn) {
+    const s = sessions.get(sessionId)
+    sessions.update(sessionId, { contextSummary: fn(s.contextSummary ?? createSessionSummary(now())) })
+  }
+
+  /** Deterministic context state, updated as soon as a tool result exists. */
+  async function observeResult(sessionId, workspace, call, result) {
+    const obs = describeObservation(call, result)
+    observations.set(result, obs)
+    updateSummary(sessionId, (summary) => observeToolResult(summary, { call, result, now: now() }))
+    if (result.ok) {
+      try {
+        if (result.tool === 'read_file') await observeFileRead(workspace, result.output)
+        else if (result.tool === 'read_many_files') for (const f of result.output.files) if (f.ok) await observeFileRead(workspace, f)
+      } catch { /* cache misses never affect the run */ }
+    }
+    if (obs.changed.length) invalidateFiles(workspace, obs.changed.map(c => c.path))
+    if (tools.getTool(call.name)?.permission !== 'read' || call.name === 'shell') contextEngine.invalidateWorkspace(workspace.id)
+    return obs
+  }
 
   const emit = (sessionId, type, data) =>
     sessions.appendEvent(sessionId, createEvent(type, sessionId, data, { timestamp: now() }))
@@ -105,6 +135,7 @@ export function createAgentRuntime({
         },
       })
     }
+    if (workspace) await observeResult(sessionId, workspace, call, result)
     const cancelled = result.error?.code === 'command_cancelled'
     recordToolCall(sessionId, {
       ...record, status: cancelled ? 'cancelled' : result.ok ? 'completed' : 'failed',
@@ -162,12 +193,34 @@ export function createAgentRuntime({
     })
   }
 
+  /** Records per-build context metrics on the session and announces compaction (metadata only). */
+  function noteContext(sessionId, ctx) {
+    const prev = sessions.get(sessionId).contextStats
+    sessions.update(sessionId, {
+      contextStats: {
+        compactionCount: prev.compactionCount + (ctx.compacted ? 1 : 0),
+        lastCompactionAt: ctx.compacted ? now() : prev.lastCompactionAt,
+        builds: prev.builds + 1,
+        last: ctx.metrics,
+      },
+    })
+    if (ctx.compacted) {
+      emit(sessionId, 'context.compacted', {
+        estimatedTokens: ctx.metrics.estimatedInputTokens, maxTokens: ctx.metrics.maxInputTokens,
+        droppedItems: ctx.metrics.droppedItems, summarizedItems: ctx.metrics.summarizedItems,
+        steps: ctx.steps, summaryRevision: (ctx.summaryUpdate ?? sessions.get(sessionId).contextSummary)?.revision ?? 0,
+      })
+    }
+  }
+
   /** @returns {Promise<{kind:'completed'}|{kind:'stopped', error:object, notice:string}>} throws on cancel/provider failure */
   async function runAgent(sessionId, controller) {
     const { signal } = controller
     const { provider, workspace } = validateRun(sessions.get(sessionId))
-    const system = workspace ? `${buildSystemPrompt()}\n\n${await buildWorkspaceContext(workspace)}` : buildSystemPrompt()
+    const system = buildSystemPrompt()
     const toolDefs = workspace ? tools.describeTools() : []
+    const summarizer = config.summarizeWithModel
+      ? createProviderSummarizer({ provider, model: sessions.get(sessionId).model.model, signal }) : null
     const guard = createLoopGuard({ threshold: config.maxIdenticalToolCalls })
     const shouldStop = composeStopConditions(userCancelled(), maxTurns(config.maxTurns), noProgress(config.maxFailedTurns))
     let turnCount = 0
@@ -191,14 +244,20 @@ export function createAgentRuntime({
       const startedAt = now()
       const model = sessions.get(sessionId).model
       const acc = { text: '' }
+      const ctx = await contextEngine.build({
+        session: sessions.get(sessionId), workspace, capabilities: provider.capabilities(model.model),
+        tools: toolDefs, system, summarizer, requestedOutputTokens: config.maxOutputTokens,
+      })
+      if (ctx.summaryUpdate) sessions.update(sessionId, { contextSummary: ctx.summaryUpdate })
+      noteContext(sessionId, ctx)
       let turn
       try {
         turn = await runProviderTurn({
           provider, signal, config, acc,
           request: {
             model: model.model,
-            messages: [{ role: 'system', content: system }, ...sessions.get(sessionId).messages],
-            tools: toolDefs,
+            messages: ctx.messages,
+            tools: ctx.tools,
             temperature: config.temperature,
             maxOutputTokens: config.maxOutputTokens,
             metadata: { sessionId, turn: turnNo },
@@ -226,7 +285,7 @@ export function createAgentRuntime({
         tokenUsage: sum(s.tokenUsage, turn.usage),
         turns: [...s.turns, {
           turn: turnNo, startedAt, completedAt: now(), provider: model.provider, model: model.model,
-          toolCalls: calls.map(c => ({ id: c.id, name: c.name })), usage: turn.usage, finishReason: turn.finishReason,
+          toolCalls: calls.map(c => ({ id: c.id, name: c.name })), usage: turn.usage, finishReason: turn.finishReason, context: ctx.metrics,
         }],
       })
 
@@ -252,6 +311,7 @@ export function createAgentRuntime({
         sessions.appendMessage(sessionId, {
           role: 'tool', toolCallId: planned[i].id, name: planned[i].name,
           content: serializeToolResult(result, { maxChars: limits.maxToolResultChars }),
+          meta: observations.get(result) ?? describeObservation(planned[i], result),
         })
       })
       failedTurns = results.every(r => !r.ok) ? failedTurns + 1 : 0
@@ -296,6 +356,7 @@ export function createAgentRuntime({
     setAgent(sessionId, { status: 'running', abortController: controller, error: null })
     sessions.setStatus(sessionId, 'running') // synchronous: closes the race for concurrent sendMessage calls
     const message = sessions.appendMessage(sessionId, { role: 'user', content })
+    updateSummary(sessionId, (summary) => observeUserMessage(summary, message, now()))
     emit(sessionId, 'user.message', { messageId: message.id, content })
     emit(sessionId, 'session.updated', { status: 'running' })
 
@@ -340,6 +401,25 @@ export function createAgentRuntime({
     return sessions.get(sessionId)
   }
 
+  /**
+   * Development/evaluation aid: how the next provider request would be composed for this session.
+   * Metadata only (sources, priorities, token estimates) — no message bodies, so no secrets. Has no side effects.
+   */
+  async function debugContext(sessionId) {
+    const session = sessions.get(sessionId)
+    if (!session) throw new Error(`Unknown session: ${sessionId}`)
+    const { provider, workspace } = validateRun(session)
+    const ctx = await contextEngine.build({
+      session, workspace, capabilities: provider.capabilities(session.model.model), dryRun: true,
+      tools: workspace ? tools.describeTools() : [], system: buildSystemPrompt(), requestedOutputTokens: config.maxOutputTokens,
+    })
+    return {
+      estimatedTokens: ctx.totalEstimatedTokens, budget: ctx.budget, sections: ctx.sections, compacted: ctx.compacted, steps: ctx.steps,
+      selectedItems: ctx.items, omittedItems: ctx.omitted, metrics: ctx.metrics,
+      summaryRevision: (session.contextSummary ?? {}).revision ?? 0, stats: session.contextStats,
+    }
+  }
+
   /** Marks a session explicitly finished. */
   function completeSession(sessionId) {
     sessions.setStatus(sessionId, 'completed')
@@ -354,6 +434,7 @@ export function createAgentRuntime({
     cancelSession,
     completeSession,
     executeTool,
+    debugContext,
     listTools: () => tools.describeTools(),
     getSession: (id) => sessions.get(id),
     listProviders: () => providers.listProviders(),

@@ -2,7 +2,7 @@
 
 A chat-first coding agent. The user describes a coding task in natural language; the agent runtime works against a repository through tools and continues naturally from follow-up messages in the same session.
 
-> **Status:** Phase 3 (autonomous agent loop). The runtime now drives DeepSeek through a single tool loop: the model inspects the repository, edits with `apply_patch`, runs commands, observes results, adapts, and answers. DeepSeek is the **only** production provider; the runtime is provider-neutral, but no other provider is implemented. Context management/compaction, deterministic validation gates, a permission-approval UI and rich diff/terminal UI are not implemented yet.
+> **Status:** Phase 4 (context engine). On top of the autonomous DeepSeek tool loop (Phase 3), every provider request is now built by one deterministic, provider-neutral context engine with token budgeting, a structured session summary, repository awareness and progressive compaction, so long sessions in large repositories stay within the model's context window. DeepSeek is still the **only** production provider. Deterministic project-aware validation (Phase 5), a permission-approval UI, rich diff/terminal UI, persistence and additional providers are not implemented yet.
 
 ## Architecture
 
@@ -20,6 +20,7 @@ user message
 | Protocol | `src/protocol/` | Canonical event types, message/session/error schemas |
 | Sessions | `src/sessions/` | Session manager (live state, subscribers) and a pluggable store (in-memory today) |
 | Providers | `src/providers/` | One normalized adapter interface, registry, neutral stream events; `deepseek.js` is the initial adapter |
+| Context | `src/context/` | Context engine: token budget, session summary, tool-observation compaction, repository/workspace context, relevance |
 | Agent | `src/agent/` | Provider-neutral runtime, agent state, stop conditions, canonical system prompt |
 | Workspace | `src/workspace/` | `Workspace` contract, `LocalWorkspace`, workspace manager, path safety, file index, search, patch engine, shell runner, git |
 | Tools | `src/tools/` | Provider-neutral tool registry, executor, permission classifier, normalized results; definitions in `src/tools/definitions/` |
@@ -31,6 +32,30 @@ user message
 **Provider abstraction.** Provider-specific behavior (endpoints, auth, streaming format, tool schemas, error mapping) lives only in adapters. Adapters expose capabilities and emit provider-neutral events (`text_delta`, `reasoning_status`, `tool_call`, `usage`, `completed`); failures are normalized to `{ code, message, provider, retryable, cause }`.
 
 **Sessions.** A session holds normalized messages, events, tool calls, changed files, status, and token usage. Statuses: `idle`, `running`, `waiting_permission`, `waiting_user`, `completed`, `error`, `cancelled`. Cancellation propagates through an `AbortController` to the provider request.
+
+## Context engine (Phase 4)
+
+**Full session state is stored separately from the bounded provider working context.** `session.messages` is the complete, canonical record and is never trimmed to fit a model. Before each provider turn the runtime asks the context engine for a derived view (`src/context/`); nothing else builds provider messages, and the engine contains no provider-specific logic (the model's window and output limit come from adapter capabilities).
+
+```text
+session + workspace + tool state ─► context engine ─► { messages, tools } ─► provider adapter
+                                         │
+   system instructions · workspace · session summary · repository · conversation (incl. tool observations)
+                                         │
+                       token budget → compact if projected input > threshold → verify → build
+```
+
+**Sections and priorities.** `critical`: system instructions and the current user request (never altered or dropped — if they cannot fit, the run fails with `context_budget_exceeded`). `high`: the session summary (goal, objective, decisions, changed files, unresolved issues, validation) and the active tool cycle. `medium`: recent conversation, workspace metadata, repository context. `low`: older narration, stale tool outputs, old exchanges. Every included item carries `{section, type, source, priority, estimatedTokens}`; `runtime.debugContext(sessionId)` returns that metadata plus omitted items and per-section token counts (no message bodies, so no secrets).
+
+**Token budgeting.** `usable input = context window − reserved output − safety margin − tool schemas`, all from model capabilities and `runtimeConfig.js` (`contextSafetyMarginTokens`, `compactionThresholdRatio` 0.78, `compactionTargetRatio` 0.6, …). One replaceable estimator (`tokenEstimator.js`, conservative ~3.6 chars/token) is used everywhere; tool schemas are budgeted with extra headroom. Compaction runs *before* the request when the projected input exceeds the threshold, and aims for the lower target so it does not re-run every turn.
+
+**Progressive compaction** (each step only if still over target): strip old tool-call narration → replace old tool results (and large arguments of old tool calls) with compact observations → fold the oldest *complete* exchanges into the summary → shrink repository context → shrink the summary to its core → keep only the active tool result in full → drop middle cycles of the current exchange. Tool call/result pairs are atomic and every output is re-validated (`context_invalid_history`); the active cycle and the current request are pinned. Reads that a later edit made obsolete are replaced by a "superseded" note. Folding is persisted as `summary.lastCompactedMessageId` + `revision`, so history is summarized incrementally and never re-summarized from scratch. Compaction announces itself with a metadata-only `context.compacted` event; nothing is added to the visible chat.
+
+**Structured session summary** (`session.contextSummary`, plain JSON): `goal`, `currentObjective`, `decisions` (standing constraints extracted from user messages; later entries override earlier ones), `filesInspected` (merged line ranges, redundant-reread counts), `filesChanged` (with whether validated since), `commandsRun`, `validations`, `unresolvedIssues` (a failing validation stays until the same command passes), `errorsEncountered`, `importantFacts`, `revision`. It is updated deterministically from tool results as they arrive. Optionally (`summarizeWithModel`, off by default) the session's own provider is asked, through a tiny separate prompt with no tools, to add decisions/facts when history is folded; failure falls back to deterministic compaction. Hidden model reasoning is never stored in the summary.
+
+**Repository context.** Bounded and workspace-scoped: a compact top-level tree and conventions (language, frameworks, test tool, source/test dirs), the first of `AGENTS.md`/`CONTRIBUTING.md` (clipped), and the top *relevant* files chosen by a deterministic scorer (`relevance.js`: changed, recently read, search hits, named in the request, path-term and symbol matches, import proximity — each with reasons). File summaries (symbols, imports, content hash) are cached per workspace and invalidated when tools modify a file or its mtime/size changes. `.env*`, credentials/keys, binary files and generated directories (`node_modules`, `.git`, `dist`, `build`, `coverage`, `.cache`, `vendor`) are never injected automatically. There are no embeddings, vector stores or memory graphs.
+
+**Failure.** If even the pinned context cannot fit, the run fails before any request with `context_budget_exceeded` ("The current session exceeds the model's usable context capacity and could not be compacted safely…"); the session stays intact.
 
 ## Agent loop (Phase 3)
 
@@ -173,6 +198,7 @@ Browser-side execution is temporary: any `VITE_*` value is exposed to the client
 | `npm run build` | Production build |
 | `npm run lint` | ESLint |
 | `npm test` | Unit and integration tests (no network or API key required) |
+| `npm run test:context` | Context engine: estimator, budget, summary, relevance, compaction, long sessions, Phase 4 acceptance |
 | `npm run test:agent` | Agent loop, DeepSeek adapter (mocked wire), retries, cancellation, client activity |
 | `npm run agent -- --workspace DIR "request"` | Run the agent on a local repository from the terminal |
 | `npm run test:deepseek` | Optional live DeepSeek smoke test (requires credentials; not in `npm test`) |
@@ -181,7 +207,7 @@ Browser-side execution is temporary: any `VITE_*` value is exposed to the client
 
 ## Planned
 
-Not yet implemented: context management and compaction (Phase 4), automatic validation, permission/approval and diff/terminal UI, additional providers, and Git push/PR flows.
+Not yet implemented: automatic validation, permission/approval and diff/terminal UI, additional providers, and Git push/PR flows.
 
 ## Legacy code
 

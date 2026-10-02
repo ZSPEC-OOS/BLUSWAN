@@ -13,13 +13,14 @@
 //   runCommand(command, {timeoutMs?, env?, signal?})   → CommandResult
 //   gitStatus() / gitDiff({path?, staged?})
 //   exists(path) / stat(path)
+//   listFiles({path?})                                 → {files, truncated}  (indexed regular files, sorted; ignores generated dirs)
 //   close()
 // }
 // All paths are workspace-relative; failures throw WorkspaceError with a stable `code`.
 
 export const WORKSPACE_METHODS = Object.freeze([
   'readFile', 'writeFile', 'deleteFile', 'listDirectory', 'searchFiles', 'grep',
-  'applyPatch', 'runCommand', 'gitStatus', 'gitDiff', 'exists', 'stat', 'close',
+  'applyPatch', 'runCommand', 'gitStatus', 'gitDiff', 'exists', 'stat', 'listFiles', 'close',
 ])
 
 export function isWorkspace(ws) {

@@ -65,6 +65,14 @@ export async function createLocalWorkspace({ root, id = `ws_${newId()}`, name, l
       })
     },
 
+    /** Indexed regular files (generated directories excluded), optionally under `path`. */
+    async listFiles({ path: scope = '' } = {}) {
+      const rel = normalizeRelativePath(scope)
+      const snap = await index.snapshot()
+      const files = rel === '' ? snap.files : snap.files.filter(f => f === rel || f.startsWith(`${rel}/`))
+      return { files, truncated: snap.truncated }
+    },
+
     async applyPatch(patch) {
       try {
         return await applyPatchAtomically({ patch, resolve, limits })

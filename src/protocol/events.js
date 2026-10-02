@@ -20,6 +20,7 @@ export const EVENT_TYPES = Object.freeze([
   'permission.requested',
   'validation.started',
   'validation.completed',
+  'completion.warning',
   'session.completed',
   'session.failed',
   'session.cancelled',

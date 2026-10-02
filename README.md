@@ -2,7 +2,7 @@
 
 A chat-first coding agent. The user describes a coding task in natural language; the agent runtime works against a repository through tools and continues naturally from follow-up messages in the same session.
 
-> **Status:** Phase 4 (context engine). On top of the autonomous DeepSeek tool loop (Phase 3), every provider request is now built by one deterministic, provider-neutral context engine with token budgeting, a structured session summary, repository awareness and progressive compaction, so long sessions in large repositories stay within the model's context window. DeepSeek is still the **only** production provider. Deterministic project-aware validation (Phase 5), a permission-approval UI, rich diff/terminal UI, persistence and additional providers are not implemented yet.
+> **Status:** Phase 5 (validation-grounded completion). Editing code no longer implies "done": when the model stops, the runtime checks what changed, runs the project's own safe test/lint/typecheck/build commands (focused first, broader when warranted), feeds failures back to the same model for repair, and finishes only with evidence in hand or an honest record of what could not be verified. DeepSeek is still the **only** production provider. Final chat UX (Phase 6), permission approval, persistence and additional providers are not implemented yet.
 
 ## Architecture
 
@@ -12,7 +12,7 @@ user message
         ▲                                                       │
         │ normalized tool results (role: tool)                  ▼
         └──────────── tool executor → tool registry → workspace (files · search · shell · git)
-  → final assistant response (a response with no tool calls ends the run)
+  → final assistant response (a response with no tool calls is a completion candidate; see Validation and completion)
 ```
 
 | Layer | Path | Responsibility |
@@ -21,6 +21,7 @@ user message
 | Sessions | `src/sessions/` | Session manager (live state, subscribers) and a pluggable store (in-memory today) |
 | Providers | `src/providers/` | One normalized adapter interface, registry, neutral stream events; `deepseek.js` is the initial adapter |
 | Context | `src/context/` | Context engine: token budget, session summary, tool-observation compaction, repository/workspace context, relevance |
+| Validation | `src/validation/` | Project detection, safe command discovery, change-aware policy, runners, result parsing, failure classification, validation state |
 | Agent | `src/agent/` | Provider-neutral runtime, agent state, stop conditions, canonical system prompt |
 | Workspace | `src/workspace/` | `Workspace` contract, `LocalWorkspace`, workspace manager, path safety, file index, search, patch engine, shell runner, git |
 | Tools | `src/tools/` | Provider-neutral tool registry, executor, permission classifier, normalized results; definitions in `src/tools/definitions/` |
@@ -32,6 +33,41 @@ user message
 **Provider abstraction.** Provider-specific behavior (endpoints, auth, streaming format, tool schemas, error mapping) lives only in adapters. Adapters expose capabilities and emit provider-neutral events (`text_delta`, `reasoning_status`, `tool_call`, `usage`, `completed`); failures are normalized to `{ code, message, provider, retryable, cause }`.
 
 **Sessions.** A session holds normalized messages, events, tool calls, changed files, status, and token usage. Statuses: `idle`, `running`, `waiting_permission`, `waiting_user`, `completed`, `error`, `cancelled`. Cancellation propagates through an `AbortController` to the provider request.
+
+## Validation and completion (Phase 5)
+
+There is still one agent, one tool loop and one workspace. Validation is a capability inside that loop, not a workflow phase: the runtime supplies **evidence**; the model decides how to fix things.
+
+```text
+model returns a final answer (no tool calls)
+        │
+        ▼
+completion check ── nothing changed / docs only / user declined / nothing available ──► finish (reason recorded)
+        │ code changed and validation is stale or missing
+        ▼
+validation policy ─► focused tests → typecheck → lint → (broader tests) → build   (stops at the first failure)
+        │
+        ├─ pass ──► model sees COMPLETION EVIDENCE (checks, changed files, git summary) → grounded final answer
+        └─ fail ──► model sees classified diagnostics → repairs → edit makes evidence stale → checks run again
+```
+
+**Project detection** (`src/validation/projectDetector.js`): Node (npm, pnpm, yarn, bun from lockfiles or the `packageManager` field; conflicting lockfiles resolve pnpm > yarn > bun > npm and are reported; npm is the documented fallback), TypeScript, Python (pip/poetry/pipenv/uv, pytest), Rust (cargo), Go. The descriptor is plain serializable data.
+
+**Command discovery** (`commandDiscovery.js`): explicit project scripts (`test`, `lint`, `typecheck`, `build`, `test:unit`, …) outrank well-known ecosystem defaults; nothing is invented for missing scripts. Script *names are never trusted*: each script body, the scripts it calls, and npm `pre`/`post` hooks go through the shell command classifier, and anything that is not read/workspace-only (publishing, `git push`, `curl | sh`, installs, deletion) is marked unsafe and never auto-run.
+
+**Policy** (`changedFileStrategy.js`): changes are classified (source, test, config, dependency, style, docs). Related tests are found by naming convention (`src/auth.js` → `tests/auth.test.js`, `*.spec.ts`, `test_auth.py`, `auth_test.go`, …) and run as a focused check; significant changes (config, dependencies, several modules) add the full suite; build runs for production-code or config changes; CSS-only changes skip tests; test-only changes run just those tests; docs-only changes run nothing. Every decision carries a reason (`debugValidation(sessionId)` shows it). A check the agent already ran itself through `shell` counts as evidence and is not repeated.
+
+**Evidence and staleness** (`validationState.js`, `session.validation`): every result is stamped with a mutation counter. Any successful code/config mutation makes earlier results stale (documentation does not); a passing result is never accepted as proof about code edited afterwards. Unresolved failures persist until the same command passes. The validation state and unresolved failures are included at high priority in the context engine; old validation logs are compacted like any other tool result.
+
+**Failures** (`resultParser.js`, `failureClassifier.js`): output is parsed for node:test/TAP, jest/vitest, pytest, cargo, go, ESLint, TypeScript and build errors, then classified as `test_failure`, `lint_failure`, `type_error`, `build_failure`, `dependency_missing`, `command_not_found`, `configuration_error`, `timeout`, `runtime_crash`, `environment_error` or `unknown`, with key messages and file:line locations. Missing tooling yields status `unavailable`, not a failure to repair. Output is bounded (beginning and end are kept).
+
+**Limits and recovery** (`src/agent/recovery.js`): at most `maxAutomaticValidationRounds` (3) validation rounds and `maxRecoveryRounds` (3) repair rounds per user request. A failing check is not rerun on unchanged code; failures that no edit can fix (missing dependency, environment) stop automatic continuation. When the limit is reached the model receives the failing evidence ("Automatic validation will not continue") and answers honestly; the run outcome is `failed` and the failure stays unresolved in the session. Per-check timeouts (`defaultTestTimeoutMs` 60 s focused / `broadTestTimeoutMs` 180 s, lint, typecheck, build) and session cancellation terminate the check's process tree; a cancelled check never triggers recovery.
+
+**Outcomes.** Each user request is a run (`session.runs[]`): `success`, `warning` (e.g. an unsupported claim was made), `failed` (unresolved validation failure) or `cancelled`, with metrics (`validationCommandsRun`, passes/failures, `recoveryRounds`, `firstPassSuccess`, `repairSuccess`, `staleValidationPrevented`, `finalValidationStatus`). The reusable `session.status` stays `completed` after a failed run so the conversation can continue. A narrow deterministic check flags explicit claims (“tests pass”, “build succeeds”, …) that the evidence does not support (`completion.warning`); the response is never rewritten and no second model is consulted.
+
+**Safety.** Validation is observational: it never runs fixers (`--fix`, `--write`), never installs dependencies (including when something is missing), and never mutates git; git is read only to report status and diff statistics. "Do not run tests" in the user's message is honored and recorded as `skipped`. Settings (`enableAutomaticValidation`, `enableBroadValidation`, limits, timeouts, `maxValidationOutputBytes`) live in `src/config/runtimeConfig.js`.
+
+Known limitation: file changes made indirectly by a shell command (not through `apply_patch`/`write_file`/`delete_file`) are not tracked as mutations.
 
 ## Context engine (Phase 4)
 
@@ -68,7 +104,7 @@ sendMessage(sessionId, text)
     stop check            cancelled · max turns · no progress
     provider turn         stream one response → text deltas, tool calls, usage        (retry only if nothing was shown)
     commit                assistant message {content, toolCalls}; trace + usage
-    no tool calls?        → status completed, session.completed
+    no tool calls?        → completion check (Phase 5): validate if warranted, else status completed, session.completed
     execute tool calls    read-only calls run concurrently, everything else in emitted order
     append tool results   one `tool` message per call; loop guard; next turn
 ```
@@ -198,6 +234,7 @@ Browser-side execution is temporary: any `VITE_*` value is exposed to the client
 | `npm run build` | Production build |
 | `npm run lint` | ESLint |
 | `npm test` | Unit and integration tests (no network or API key required) |
+| `npm run test:validation` | Project detection, command discovery/safety, policy, parsing, runners, validation state, completion/recovery, Phase 5 acceptance |
 | `npm run test:context` | Context engine: estimator, budget, summary, relevance, compaction, long sessions, Phase 4 acceptance |
 | `npm run test:agent` | Agent loop, DeepSeek adapter (mocked wire), retries, cancellation, client activity |
 | `npm run agent -- --workspace DIR "request"` | Run the agent on a local repository from the terminal |
@@ -207,7 +244,7 @@ Browser-side execution is temporary: any `VITE_*` value is exposed to the client
 
 ## Planned
 
-Not yet implemented: automatic validation, permission/approval and diff/terminal UI, additional providers, and Git push/PR flows.
+Not yet implemented: permission/approval and diff/terminal UI, additional providers, and Git push/PR flows.
 
 ## Legacy code
 

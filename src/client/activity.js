@@ -15,6 +15,8 @@ const LABELS = {
   git_diff: i => `Inspecting diff${i.path ? ` of ${i.path}` : ''}`,
 }
 
+const VALIDATION_LABEL = { test: 'tests', lint: 'lint', typecheck: 'type check', build: 'build', format_check: 'format check', custom: 'checks' }
+
 export function describeToolCall(tool, inputSummary = {}) {
   return (LABELS[tool] ?? (() => `Running ${tool}`))(inputSummary)
 }
@@ -45,6 +47,24 @@ export function buildTimeline(events) {
         break
       case 'file.changed':
         tools.get(e.data.toolCallId)?.changed.push(`${e.data.action} ${e.data.path}`)
+        break
+      case 'validation.started': {
+        const item = { kind: 'tool', id: e.data.validationId, label: `Running ${VALIDATION_LABEL[e.data.kind] ?? 'checks'}: ${e.data.command}`, status: 'running', changed: [] }
+        tools.set(item.id, item)
+        items.push(item)
+        break
+      }
+      case 'validation.completed': {
+        const item = tools.get(e.data.validationId)
+        if (item) {
+          item.status = e.data.status === 'passed' ? 'done' : ['failed', 'error'].includes(e.data.status) ? 'failed' : 'skipped'
+          item.label = `${VALIDATION_LABEL[e.data.kind] ?? 'Checks'} ${e.data.status === 'passed' ? 'passed' : e.data.status}: ${e.data.command}`
+          if (item.status === 'failed') item.error = e.data.summary
+        }
+        break
+      }
+      case 'completion.warning':
+        items.push({ kind: 'notice', id: e.id, text: `Unverified claim: "${e.data.claim}" — ${e.data.problem}.` })
         break
       case 'provider.retry':
         items.push({ kind: 'notice', id: e.id, text: `Retrying request (attempt ${e.data.attempt}, ${e.data.reason})…` })

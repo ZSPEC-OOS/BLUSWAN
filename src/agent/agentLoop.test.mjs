@@ -13,7 +13,7 @@ import { loadRuntimeConfig } from '../config/runtimeConfig.js'
 import { createError } from '../protocol/schemas.js'
 
 const model = { provider: 'fake', model: 'm1' }
-const baseConfig = { ...loadRuntimeConfig({}), maxTurns: 25, maxTransportRetries: 2, retryBaseDelayMs: 1, retryMaxDelayMs: 2 }
+const baseConfig = { ...loadRuntimeConfig({}), enableAutomaticValidation: false, maxTurns: 25, maxTransportRetries: 2, retryBaseDelayMs: 1, retryMaxDelayMs: 2 }
 const noSleep = async () => {}
 
 describe('agent loop', () => {

@@ -29,6 +29,11 @@ import { createLogger } from '../utils/logger.js'
 import { createDefaultToolRegistry } from '../tools/registry.js'
 import { createToolExecutor } from '../tools/executor.js'
 import { toolFailure } from '../tools/result.js'
+import { createValidationEngine } from '../validation/validationEngine.js'
+import { createValidationState, markMutated, recordShellResult } from '../validation/validationState.js'
+import { createCompletion, collectGitEvidence, formatValidationCycle, formatEvidenceOnly, describeValidationCycle } from './completion.js'
+import { createRunCounters, decideRecovery } from './recovery.js'
+import { checkClaims } from './claimChecker.js'
 
 const log = createLogger('runtime')
 // A finished, cancelled or failed run leaves the conversation open for the next user message.
@@ -58,11 +63,24 @@ export function createAgentRuntime({
   const limits = resolveLimits({}, config)
   const toolExecutor = createToolExecutor({ registry: tools, policy: toolPolicy, limits, now })
   const contextEngine = createContextEngine({ config, now })
+  const validationEngine = createValidationEngine({ config, now })
+  const completion = createCompletion({ validationEngine })
   const observations = new WeakMap() // tool result → compact observation (stored on the tool message)
 
   function updateSummary(sessionId, fn) {
     const s = sessions.get(sessionId)
     sessions.update(sessionId, { contextSummary: fn(s.contextSummary ?? createSessionSummary(now())) })
+  }
+
+  function setValidation(sessionId, next) { sessions.update(sessionId, { validation: next }) }
+  const validationOf = (sessionId) => sessions.get(sessionId).validation ?? createValidationState()
+
+  /** Validation results enter the structured summary exactly like shell checks (commands, failures, resolution). */
+  function recordValidationSummary(sessionId, results) {
+    for (const r of results.filter(x => ['passed', 'failed', 'error'].includes(x.status))) {
+      const shellLike = { ok: true, tool: 'shell', output: { command: r.command, exitCode: r.status === 'passed' ? 0 : (r.exitCode ?? 1), stdout: r.diagnostics?.keyMessages?.join('\n') || r.outputExcerpt || r.summary, stderr: '' } }
+      updateSummary(sessionId, (summary) => observeToolResult(summary, { call: { name: 'shell', input: { command: r.command } }, result: shellLike, now: now() }))
+    }
   }
 
   /** Deterministic context state, updated as soon as a tool result exists. */
@@ -76,7 +94,17 @@ export function createAgentRuntime({
         else if (result.tool === 'read_many_files') for (const f of result.output.files) if (f.ok) await observeFileRead(workspace, f)
       } catch { /* cache misses never affect the run */ }
     }
-    if (obs.changed.length) invalidateFiles(workspace, obs.changed.map(c => c.path))
+    if (obs.changed.length) {
+      invalidateFiles(workspace, obs.changed.map(c => c.path))
+      setValidation(sessionId, markMutated(validationOf(sessionId), obs.changed)) // earlier evidence no longer describes the code
+      validationEngine.invalidate(workspace, obs.changed.map(c => c.path))
+    }
+    if (call.name === 'shell') {
+      try {
+        const check = await validationEngine.fromShell(workspace, call, result) // checks the agent runs itself count as evidence
+        if (check) setValidation(sessionId, recordShellResult(validationOf(sessionId), check, { now: now() }))
+      } catch { /* evidence capture must never break a run */ }
+    }
     if (tools.getTool(call.name)?.permission !== 'read' || call.name === 'shell') contextEngine.invalidateWorkspace(workspace.id)
     return obs
   }
@@ -193,6 +221,81 @@ export function createAgentRuntime({
     })
   }
 
+  const userInstructionsFor = (session) => [
+    [...session.messages].reverse().find(m => m.role === 'user')?.content ?? '',
+    ...(session.contextSummary?.decisions ?? []).map(d => d.text),
+  ]
+
+  async function decideCompletion(sessionId, workspace, run) {
+    const session = sessions.get(sessionId)
+    try {
+      return await completion.decide({ session, workspace, counters: run.counters, userInstructions: userInstructionsFor(session) })
+    } catch (e) {
+      log.warn('completion check failed', { message: e?.message })
+      return { action: 'complete', reason: 'validation_planning_failed', state: validationOf(sessionId), outcome: 'warning' }
+    }
+  }
+
+  /** The model produced a final answer: record the evidence state, check its validation claims, set the outcome. */
+  function finishRun(sessionId, decision, text, run) {
+    if (decision.state !== sessions.get(sessionId).validation) setValidation(sessionId, decision.state)
+    const warnings = checkClaims(text, decision.state)
+    for (const w of warnings) {
+      run.counters.warnings.push(w)
+      emit(sessionId, 'completion.warning', { claim: w.claim, kind: w.kind, problem: w.problem })
+    }
+    const outcome = decision.outcome === 'success' && warnings.length ? 'warning' : decision.outcome
+    return { kind: 'completed', outcome, reason: decision.reason }
+  }
+
+  /** Runs the planned checks (or just presents evidence) and records the result as a runtime-initiated tool cycle. */
+  async function runCompletionCycle(sessionId, workspace, signal, run, cycle, call) {
+    const c = run.counters
+    const changedFiles = () => sessions.get(sessionId).changedFiles
+    let content
+    let meta
+    try {
+      let state = cycle.state
+      if (cycle.action === 'validate') {
+        c.validationRounds += 1
+        if (cycle.staleBlocked) c.staleValidationPrevented += 1
+        const ran = await validationEngine.run({ workspace, decision: cycle.plan, state, signal, emit: (type, data) => emit(sessionId, type, data) })
+        state = ran.state
+        setValidation(sessionId, state)
+        recordValidationSummary(sessionId, ran.results)
+        const failed = ran.results.some(r => r.status === 'failed' || r.status === 'error')
+        const allPassed = ran.results.length > 0 && ran.results.every(r => r.status === 'passed')
+        c.commandsRun += ran.results.length
+        c.passes += ran.results.filter(r => r.status === 'passed').length
+        c.failures += ran.results.filter(r => r.status === 'failed' || r.status === 'error').length
+        c.durationMs += ran.results.reduce((n, r) => n + r.durationMs, 0)
+        if (c.firstRoundPassed === null) c.firstRoundPassed = allPassed
+        let recovery = { action: 'continue', reason: 'none' }
+        if (failed) {
+          recovery = decideRecovery({ results: ran.results, counters: c, config: validationEngine.config, mutationSeq: state.mutationSeq })
+          c.sawFailure = true
+          c.lastFailureSeq = state.mutationSeq
+          if (recovery.action === 'continue') c.recoveryRounds += 1
+          else c.evidencePresented = true
+        } else if (allPassed && c.sawFailure) c.repairSucceeded = true
+        const git = failed && recovery.action === 'continue' ? null : await collectGitEvidence(workspace)
+        content = formatValidationCycle({ plan: cycle.plan, results: ran.results, state, changedFiles: changedFiles(), git, recovery })
+        meta = describeValidationCycle({ results: ran.results, state })
+      } else {
+        c.evidencePresented = true
+        content = formatEvidenceOnly({ state, changedFiles: changedFiles(), git: await collectGitEvidence(workspace), reason: cycle.reason })
+        meta = describeValidationCycle({ results: [], state, evidenceOnly: true })
+      }
+    } finally {
+      // The assistant message already declared this call; it must always receive a result.
+      sessions.appendMessage(sessionId, {
+        role: 'tool', toolCallId: call.id, name: 'validation',
+        content: content ?? 'Tool: validation\nStatus: interrupted',
+        meta: meta ?? { ok: false, compact: 'Validation was interrupted.', paths: [], hits: [], changed: [] },
+      })
+    }
+  }
+
   /** Records per-build context metrics on the session and announces compaction (metadata only). */
   function noteContext(sessionId, ctx) {
     const prev = sessions.get(sessionId).contextStats
@@ -214,7 +317,7 @@ export function createAgentRuntime({
   }
 
   /** @returns {Promise<{kind:'completed'}|{kind:'stopped', error:object, notice:string}>} throws on cancel/provider failure */
-  async function runAgent(sessionId, controller) {
+  async function runAgent(sessionId, controller, run) {
     const { signal } = controller
     const { provider, workspace } = validateRun(sessions.get(sessionId))
     const system = buildSystemPrompt()
@@ -273,7 +376,20 @@ export function createAgentRuntime({
       }
 
       // Commit the assistant message (text and tool calls together) before any tool runs.
-      const calls = uniqueToolCalls(sessionId, turn.toolCalls)
+      let calls = uniqueToolCalls(sessionId, turn.toolCalls)
+
+      // No tool calls = a completion candidate. Completion is grounded in validation evidence: when checks
+      // are warranted, the runtime runs them (as a runtime-initiated cycle) and the model sees the result.
+      let cycle = null
+      let completionDecision = null
+      if (calls.length === 0) {
+        completionDecision = await decideCompletion(sessionId, workspace, run)
+        if (completionDecision.action !== 'complete') {
+          cycle = completionDecision
+          calls = [{ id: `validation_${run.counters.validationRounds + 1}_${newId().slice(0, 6)}`, name: 'validation',
+            input: { action: cycle.action, reason: cycle.reason, commands: cycle.plan?.commands.map(c => c.command) ?? [] } }]
+        }
+      }
       const message = sessions.appendMessage(sessionId, {
         role: 'assistant', content: turn.text,
         ...(calls.length ? { toolCalls: calls } : {}),
@@ -289,7 +405,12 @@ export function createAgentRuntime({
         }],
       })
 
-      if (calls.length === 0) return { kind: 'completed' }
+      if (cycle) {
+        await runCompletionCycle(sessionId, workspace, signal, run, cycle, calls[0])
+        failedTurns = 0
+        continue
+      }
+      if (calls.length === 0) return finishRun(sessionId, completionDecision, turn.text, run)
 
       // Loop guard: warn once on the Nth identical consecutive call, stop on the next.
       let stopRepeat = false
@@ -332,6 +453,24 @@ export function createAgentRuntime({
     return result
   }
 
+  /** Appends the run record (one per user request) with its outcome and validation metrics. */
+  function finalizeRun(sessionId, run, outcome) {
+    const s = sessions.get(sessionId)
+    const c = run.counters
+    const record = {
+      id: run.id, userMessageId: run.userMessageId, startedAt: run.startedAt, completedAt: now(), outcome,
+      turns: s.turns.length - run.turnsAtStart, changedFiles: s.changedFiles.map(f => f.path),
+      warnings: c.warnings,
+      validation: {
+        validationCommandsRun: c.commandsRun, validationPasses: c.passes, validationFailures: c.failures, validationDurationMs: c.durationMs,
+        recoveryRounds: c.recoveryRounds, automaticRounds: c.validationRounds, finalValidationStatus: (s.validation ?? createValidationState()).currentStatus,
+        firstPassSuccess: c.firstRoundPassed, repairSuccess: c.repairSucceeded, staleValidationPrevented: c.staleValidationPrevented,
+      },
+    }
+    sessions.update(sessionId, { runs: [...(s.runs ?? []), record] })
+    return record
+  }
+
   function finishCancelled(sessionId) {
     sessions.cancel(sessionId)
     setAgent(sessionId, { status: 'cancelled', abortController: null })
@@ -360,13 +499,16 @@ export function createAgentRuntime({
     emit(sessionId, 'user.message', { messageId: message.id, content })
     emit(sessionId, 'session.updated', { status: 'running' })
 
+    const run = { id: `run_${newId()}`, userMessageId: message.id, startedAt: now(), counters: createRunCounters(), turnsAtStart: session.turns.length }
     try {
-      const outcome = await runAgent(sessionId, controller)
+      const outcome = await runAgent(sessionId, controller, run)
       setAgent(sessionId, { status: 'completed', abortController: null })
       if (outcome.kind === 'completed') {
+        const record = finalizeRun(sessionId, run, outcome.outcome)
         sessions.setStatus(sessionId, 'completed')
-        emit(sessionId, 'session.completed', { turns: sessions.get(sessionId).turns.length })
+        emit(sessionId, 'session.completed', { turns: sessions.get(sessionId).turns.length, outcome: record.outcome, runId: record.id })
       } else {
+        finalizeRun(sessionId, run, 'failed')
         commitAssistantText(sessionId, outcome.notice)
         setAgent(sessionId, { status: 'error', error: outcome.error })
         sessions.setStatus(sessionId, 'error')
@@ -375,8 +517,10 @@ export function createAgentRuntime({
     } catch (e) {
       const error = toBluswanError(e)
       if (error.code === 'cancelled' || controller.signal.aborted) {
+        finalizeRun(sessionId, run, 'cancelled')
         finishCancelled(sessionId)
       } else {
+        finalizeRun(sessionId, run, 'failed')
         log.warn('run failed', { sessionId, code: error.code })
         setAgent(sessionId, { status: 'error', abortController: null, error })
         sessions.setStatus(sessionId, 'error')
@@ -420,6 +564,16 @@ export function createAgentRuntime({
     }
   }
 
+  /** Development aid: detected project, discovered commands, validation state, and what the policy would do now. */
+  async function debugValidation(sessionId) {
+    const session = sessions.get(sessionId)
+    if (!session) throw new Error(`Unknown session: ${sessionId}`)
+    const { workspace } = validateRun(session)
+    if (!workspace) return { project: null, discoveredCommands: [], state: session.validation, policyDecision: null, runs: session.runs }
+    const info = await validationEngine.debug({ workspace, state: session.validation ?? createValidationState(), userInstructions: userInstructionsFor(session) })
+    return { ...info, runs: session.runs }
+  }
+
   /** Marks a session explicitly finished. */
   function completeSession(sessionId) {
     sessions.setStatus(sessionId, 'completed')
@@ -435,6 +589,7 @@ export function createAgentRuntime({
     completeSession,
     executeTool,
     debugContext,
+    debugValidation,
     listTools: () => tools.describeTools(),
     getSession: (id) => sessions.get(id),
     listProviders: () => providers.listProviders(),

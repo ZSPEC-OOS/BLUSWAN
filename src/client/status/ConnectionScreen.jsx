@@ -42,7 +42,7 @@ export default function ConnectionScreen({ connection, kind = null, message = nu
             {warnings.map(w => <p key={w.code} className="conn-card__warn" role="note">{w.message}</p>)}
             {mobile && failureKind === 'server_unreachable' ? <p className="conn-card__hint">On a phone or tablet the runtime must be reachable over the network (not “localhost”) and served over HTTPS.</p> : null}
             {seconds !== null && connection?.failure?.retryable ? <p className="conn-card__meta" aria-live="off">Trying again in {seconds}s…</p> : null}
-            <div className="conn-card__actions">{info.actions.map(act)}</div>
+            <div className="conn-card__actions">{info.actions.filter(a => !(a === 'retry' && failureKind.startsWith('authentication') && onSignIn)).map(act)}</div>
             {showDetails ? <DiagnosticsPanel connection={connection} apiUrl={apiUrl} diagnose={diagnose ?? (async () => { throw new Error('unavailable') })} /> : null}
           </>
         ) : (

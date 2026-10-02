@@ -66,7 +66,7 @@ export function describeFailure(kind, { savedKnown = false } = {}) {
     server_unreachable: { title: 'BLUSWAN could not reach its runtime', detail: 'The runtime may not be running, or this address may be wrong.', actions: ['retry', 'details'] },
     server_not_ready: { title: 'BLUSWAN\'s runtime is starting…', detail: 'It is up but not ready yet. This page will continue on its own.', actions: ['retry', 'details'] },
     authentication_required: { title: 'Sign in to continue', detail: 'This runtime requires an account.', actions: ['signin'] },
-    authentication_failed: { title: 'Your session has expired', detail: 'Sign in again to continue where you left off.', actions: ['signin', 'details'] },
+    authentication_failed: { title: 'Your session has expired', detail: 'Sign in again to continue where you left off.', actions: ['signin', 'retry', 'details'] },
     persistence_unavailable: { title: 'Storage is unavailable', detail: 'The runtime cannot save conversations right now, so coding is paused to avoid losing work.', actions: ['retry', 'details'] },
     workspace_host_unavailable: { title: 'The workspace location is unavailable', detail: 'The runtime cannot reach the folders it may open. Other parts of BLUSWAN keep working.', actions: ['retry', 'details'] },
     configuration_error: { title: 'The runtime is misconfigured', detail: 'An administrator needs to fix the server configuration. Connection details list what to check.', actions: ['details', 'retry'] },

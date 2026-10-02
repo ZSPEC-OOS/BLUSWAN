@@ -16,7 +16,8 @@ export default function ConnectionBanner({ connection, onRetry, onSignIn, onRelo
     primary = onRetry && <button type="button" className="btn btn--small" onClick={onRetry}>Try now</button>
   } else if (connection.state === 'auth_error') {
     tone = 'error'; text = 'Your session has expired. Sign in again to continue.'
-    primary = onSignIn && <button type="button" className="btn btn--small" onClick={onSignIn}>Sign in again</button>
+    primary = onSignIn ? <button type="button" className="btn btn--small" onClick={onSignIn}>Sign in again</button>
+      : onRetry && <button type="button" className="btn btn--small" onClick={onRetry}>Try again</button>
   } else if (f?.kind === 'client_server_version_mismatch') {
     tone = 'error'; text = 'This page and the runtime no longer match.'
     primary = <button type="button" className="btn btn--small" onClick={onReload ?? (() => globalThis.location?.reload())}>Reload</button>

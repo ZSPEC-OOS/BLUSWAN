@@ -183,7 +183,7 @@ export function createRemoteRuntime({
       await cache?.save(userKey, data.sessions.items).catch(() => {})
       setConn({ state: streamRunning ? conn.state : 'connecting_stream', failure: null, nextRetryAt: null, attempts: 0 })
       if (!streamRunning) { streamRunning = true; runStream().finally(() => { streamRunning = false }) }
-      if (wasOffline) for (const x of sessions.values()) if (x.hydrated && !x.loading) loadSession(x.id, { force: true }).catch(() => {})
+      if (wasOffline) for (const x of sessions.values()) if ((x.hydrated || x.loadError) && !x.loading) loadSession(x.id, { force: true }).catch(() => {}) // include conversations whose first load failed while offline
     } catch (e) {
       throw toFailure(e, st)
     } finally { probe.done(); if (attemptAbort === probe) attemptAbort = null }

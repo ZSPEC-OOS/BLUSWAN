@@ -1,4 +1,3 @@
-import { useEffect } from 'react'
 import { useGithub } from './GithubContext.js'
 import { stageLabel } from './githubStore.js'
 
@@ -14,7 +13,6 @@ const safeUrl = (u) => (typeof u === 'string' && /^https:\/\/[A-Za-z0-9.-]+\//.t
 
 export default function WorkflowBar({ busy = false, offline = false, onReviewDiff }) {
   const { store, snapshot } = useGithub()
-  useEffect(() => { store?.refreshGit?.() }, [store])
   if (!store || !snapshot) return null
   const { git, op } = snapshot
   const data = git.data
@@ -49,7 +47,7 @@ export default function WorkflowBar({ busy = false, offline = false, onReviewDif
       </div>
       {dirtyN ? <p className="wf__counts" aria-label="Git status">{dirtyN} changed file{dirtyN === 1 ? '' : 's'} · {s.staged} staged · {s.unstaged} unstaged · {s.untracked} untracked</p> : null}
       <div className="wf__cta">
-        <p className="wf__msg" role="status">{message(stage, s, pr, gh)}</p>
+        {stage === 'local' ? <span /> : <p className="wf__msg" role="status">{message(stage, s, pr, gh)}</p>}
         <div className="wf__actions">
           {stage === 'ready_for_task' ? <Btn {...btn} primary onClick={() => store.openDialog('branch', { mode: 'create' })}>Create Task Branch</Btn> : null}
           {stage === 'has_changes' ? <><button type="button" className="btn" onClick={onReviewDiff}>Review Diff</button><Btn {...btn} primary onClick={() => { store.openDialog('commit'); store.prepareCommit() }}>Commit Changes</Btn></> : null}

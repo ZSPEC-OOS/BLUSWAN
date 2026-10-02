@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { MODE_INFO, PERMISSION_MODES } from '../../tools/permissionModes.js'
+import RepositoryOpener from './RepositoryOpener.jsx'
 import './settings.css'
 
 /**
@@ -8,7 +9,6 @@ import './settings.css'
  */
 export default function SettingsPanel({ settings, providers = [], onSave, permissionMode, onPermissionMode, canOpenWorkspaces, onOpenWorkspace, setup, userEmail, onSignOut, onClose }) {
   const [draft, setDraft] = useState(() => ({ model: settings.model }))
-  const [path, setPath] = useState('')
   const dialog = useRef(null)
 
   useEffect(() => {
@@ -51,14 +51,7 @@ export default function SettingsPanel({ settings, providers = [], onSave, permis
 
         <section aria-labelledby="set-repo">
           <h3 id="set-repo">Repository</h3>
-          {canOpenWorkspaces ? (
-            <div className="settings__row">
-              <input aria-label="Repository path" value={path} placeholder="/path/to/repository" onChange={(e) => setPath(e.target.value)} />
-              <button type="button" className="btn" disabled={!path.trim()} onClick={() => { onOpenWorkspace({ root: path.trim() }); onClose() }}>Open</button>
-            </div>
-          ) : (
-            <p className="settings__hint">This browser session cannot open local folders. Run BLUSWAN against a local repository with <code>npm run agent -- --workspace &lt;dir&gt; &quot;your request&quot;</code>.</p>
-          )}
+          <RepositoryOpener canOpenWorkspaces={canOpenWorkspaces} onOpen={(spec) => { onOpenWorkspace(spec); onClose() }} />
         </section>
 
         {userEmail || onSignOut ? (

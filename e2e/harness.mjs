@@ -165,6 +165,9 @@ async function control(req, res, url) {
     const git = (...a) => execFileSync('git', a, { cwd: dir, stdio: 'pipe' }).toString().trim()
     try { return json(res, 200, { exists: true, branch: git('rev-parse', '--abbrev-ref', 'HEAD'), status: git('status', '--porcelain'), branches: git('branch', '--format=%(refname:short)').split('\n').filter(Boolean), math: fsSync.readFileSync(path.join(dir, 'src/math.js'), 'utf8') }) } catch { return json(res, 200, { exists: false }) }
   }
+  if (op === 'git/branch') { // rename the fixture repository's current branch (long-name layout checks)
+    execFileSync('git', ['checkout', '-q', '-b', q.get('name')], { cwd: state.repoPath, stdio: 'pipe' }); return json(res, 200, { ok: true })
+  }
   if (op === 'stats') return json(res, 200, { ...(await state.backend?.service.stats()), requests: state.requests, proxiedStreams: state.proxied.size })
   return json(res, 404, { error: 'unknown control' })
 }

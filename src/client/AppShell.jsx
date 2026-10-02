@@ -16,6 +16,12 @@ import { GithubProvider, useGithub } from './github/GithubContext.js'
 import GithubPanel from './github/GithubPanel.jsx'
 import GithubDialogs from './github/GithubDialogs.jsx'
 import WorkflowBar from './github/WorkflowBar.jsx'
+import { stageLabel } from './github/githubStore.js'
+import MobileHeader from './mobile/MobileHeader.jsx'
+import MobileWorkspace from './mobile/MobileWorkspace.jsx'
+import MobileSettings from './mobile/MobileSettings.jsx'
+import RepositoryOpener from './settings/RepositoryOpener.jsx'
+import { useKeyboardInset } from './shared/useKeyboardInset.js'
 import { useMediaQuery } from './shared/useMediaQuery.js'
 import { MIN_WIDTH, MAX_WIDTH } from './workspace/workspaceStore.js'
 import './theme.css'
@@ -32,6 +38,11 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = 
   const started = useRef(false)
   const mediaMobile = useMediaQuery('(max-width: 900px)')
   const mobile = mobileOverride ?? mediaMobile
+  // phone surfaces: opening or closing them only toggles local view state — no session, run, stream or repository is touched
+  const [wsOpen, setWsOpen] = useState(false)
+  const [mSettingsOpen, setMSettingsOpen] = useState(false)
+  const [localOpen, setLocalOpen] = useState(false)
+  useKeyboardInset(mobile)
 
   useEffect(() => { // first conversation; the ref keeps StrictMode's double effect from creating two
     if (started.current) return
@@ -52,11 +63,11 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = 
   }, [store])
 
   useEffect(() => { // the branch or files may change outside BLUSWAN: re-read git state when the user comes back
-    const onFocus = () => { if (document.visibilityState !== 'hidden') store.workspace.refresh() }
+    const onFocus = () => { if (document.visibilityState !== 'hidden') { store.workspace.refresh(); gh?.refreshGit() } }
     window.addEventListener('focus', onFocus)
     document.addEventListener('visibilitychange', onFocus)
     return () => { window.removeEventListener('focus', onFocus); document.removeEventListener('visibilitychange', onFocus) }
-  }, [store])
+  }, [store, gh])
 
   // the repository workflow re-reads git when the repository, connectivity or the agent's run state changes
   const wsId = snapshot.active?.workspace?.id ?? null
@@ -69,6 +80,11 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = 
     for (const t of ghSnap?.tasks ?? []) for (const id of t.sessionIds ?? []) map[id] = t.pullRequest ? `PR #${t.pullRequest.number} — ${t.pullRequest.state}` : t.taskBranch
     return map
   }, [ghSnap?.tasks])
+  const openSettings = useCallback(() => (mobile ? setMSettingsOpen(true) : setSettingsOpen(true)), [mobile])
+  const selectFromDrawer = useCallback((id) => { store.selectSession(id); setWsOpen(false) }, [store])
+  const gitData = ghSnap?.git?.workspaceId === wsId ? ghSnap.git.data : null
+  const headerBranch = gitData ? (gitData.state.detached ? 'detached HEAD' : gitData.state.branch) : (snapshot.active?.workspace?.branch ?? null)
+  const attentionStage = ['merged', 'conflicts', 'closed_unmerged', 'remote_mismatch', 'detached', 'protected_dirty'].includes(gitData?.stage) ? stageLabel(gitData.stage) : null
   const select = useCallback((id) => { store.selectSession(id); setSidebarOpen(false) }, [store])
   const send = useCallback((text) => store.sendMessage(text).ok, [store])
   const closeSettings = useCallback(() => setSettingsOpen(false), [])
@@ -98,30 +114,45 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = 
   return (
     <ActivityLinksContext.Provider value={links}>
     <div className="shell">
-      <SessionSidebar
+      {!mobile ? <SessionSidebar
         badges={badges} sessions={snapshot.sessions} activeId={snapshot.activeId} open={sidebarOpen} onClose={() => setSidebarOpen(false)}
         onNew={() => { store.newSession(); setSidebarOpen(false) }} onRepositories={gh ? () => { gh.openPanel('home'); setSidebarOpen(false) } : undefined} onSelect={select} onDelete={(id, opts) => store.deleteSession(id, opts)}
-      />
+      /> : null}
       <div className="shell__main">
+        {mobile ? (
+          <MobileHeader
+            repository={snapshot.active?.workspace?.name ?? null} branch={headerBranch} unavailable={snapshot.active?.workspace ? !snapshot.active.workspace.available : false}
+            working={snapshot.active?.view.status === 'working'} saveStatus={snapshot.active?.persistence} hasMessages={!!snapshot.active?.view.entries.some(e => e.kind === 'user')} attention={attentionStage} workspaceOpen={wsOpen} settingsOpen={mSettingsOpen}
+            onOpenWorkspace={() => setWsOpen(true)} onOpenSettings={() => setMSettingsOpen(true)}
+          />
+        ) : null}
         <ConnectionBanner connection={snapshot.connection} onRetry={store.retryConnection} onSignIn={onLogout} onDetails={() => setDiagOpen(v => !v)} />
         {diagOpen && snapshot.connection.state !== 'online' ? <div className="conversation__banner"><DiagnosticsPanel connection={snapshot.connection} apiUrl={apiUrl} diagnose={store.diagnoseConnection} /></div> : null}
-        <ChatHeader
-          active={snapshot.active} workspace={snapshot.active?.workspace ?? snapshot.workspace} model={snapshot.active?.model ?? snapshot.model}
-          permissionMode={snapshot.permissionMode} onPermissionMode={store.setPermissionMode}
-          onOpenSettings={() => setSettingsOpen(true)} onToggleSidebar={() => setSidebarOpen(o => !o)} onToggleChanges={toggleChanges} panelOpen={panelOpen} models={snapshot.models} onChooseModel={store.chooseModel}
-        />
-        {gh ? <WorkflowBar busy={runBusy} offline={!online} onReviewDiff={toggleChanges} /> : null}
-        {gh && !snapshot.active?.workspace ? (
+        {!mobile ? (
+          <ChatHeader
+            active={snapshot.active} workspace={snapshot.active?.workspace ?? snapshot.workspace} model={snapshot.active?.model ?? snapshot.model}
+            permissionMode={snapshot.permissionMode} onPermissionMode={store.setPermissionMode}
+            onOpenSettings={() => setSettingsOpen(true)} onToggleSidebar={() => setSidebarOpen(o => !o)} onToggleChanges={toggleChanges} panelOpen={panelOpen} models={snapshot.models} onChooseModel={store.chooseModel}
+          />
+        ) : null}
+        {gh && !mobile ? <WorkflowBar busy={runBusy} offline={!online} onReviewDiff={toggleChanges} /> : null}
+        {gh && !snapshot.active?.workspace && !mobile ? (
           <div className="conversation__banner gh-empty" role="status">
             <span>Choose a repository to start coding.</span>
             <button type="button" className="btn btn--primary" onClick={() => gh.openPanel('home')}>Browse GitHub</button>
             <button type="button" className="btn" onClick={() => setSettingsOpen(true)}>Open Local Repository</button>
           </div>
         ) : null}
+        {mobile && !snapshot.active?.workspace ? (
+          <div className="mobile-choose" role="status">
+            <strong>No repository</strong><span>Choose a repository to start coding.</span>
+            <button type="button" className="btn btn--primary" onClick={() => setWsOpen(true)}>Choose Repository</button>
+          </div>
+        ) : null}
         <ConversationView
           active={snapshot.active} notice={snapshot.notice} setup={snapshot.setup} canOpenWorkspaces={snapshot.canOpenWorkspaces}
           onSend={send} onStop={store.cancel} onApprove={store.approvePermission} onDeny={store.denyPermission}
-          onOpenSettings={() => setSettingsOpen(true)} onDismissNotice={store.dismissNotice} onOpenPath={openPath} chips={chips} connection={snapshot.connection} onReconnectWorkspace={(root) => store.reconnectWorkspace(root)} onRetryLoad={store.retryLoad}
+          onOpenSettings={openSettings} onDismissNotice={store.dismissNotice} onOpenPath={openPath} chips={chips} connection={snapshot.connection} onReconnectWorkspace={(root) => store.reconnectWorkspace(root)} onRetryLoad={store.retryLoad}
         />
       </div>
       {review && panelOpen && !mobile ? (
@@ -135,6 +166,29 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = 
         </MobileSheet>
       ) : null}
       {gh ? <><GithubPanel onOpenLocal={() => setSettingsOpen(true)} /><GithubDialogs /></> : null}
+      {mobile && wsOpen ? (
+        <MobileWorkspace
+          repository={snapshot.active?.workspace?.name ?? null} branch={headerBranch} canOpenWorkspaces={snapshot.canOpenWorkspaces} hasGithub={!!gh}
+          onBrowseGithub={() => { setWsOpen(false); gh.openPanel('home') }} onOpenLocal={() => { setWsOpen(false); setLocalOpen(true) }}
+          changedCount={snapshot.active?.changedCount ?? 0} onChanges={review ? () => { setWsOpen(false); toggleChanges() } : null}
+          workflow={gh ? <WorkflowBar busy={runBusy} offline={!online} onReviewDiff={() => { setWsOpen(false); toggleChanges() }} /> : null}
+          sessions={snapshot.sessions} activeId={snapshot.activeId} badges={badges} onSelect={selectFromDrawer}
+          onNew={() => { store.newSession(); setWsOpen(false) }} onDelete={(id, opts) => store.deleteSession(id, opts)} onClose={() => setWsOpen(false)}
+        />
+      ) : null}
+      {mobile && localOpen ? (
+        <MobileSheet title="Open Local Repository" onClose={() => setLocalOpen(false)}>
+          <div className="gh-body"><RepositoryOpener canOpenWorkspaces={snapshot.canOpenWorkspaces} onOpen={(spec) => { store.openWorkspace(spec); setLocalOpen(false) }} /></div>
+        </MobileSheet>
+      ) : null}
+      {mobile && mSettingsOpen ? (
+        <MobileSettings
+          models={snapshot.models} model={snapshot.active?.model ?? snapshot.model} modelBusy={['working', 'waiting'].includes(snapshot.active?.view.status)} onChooseModel={store.chooseModel}
+          permissionMode={snapshot.permissionMode} onPermissionMode={store.setPermissionMode} github={gh ? ghSnap : null}
+          onGithub={() => { setMSettingsOpen(false); gh.openPanel('home') }} connection={snapshot.connection} apiUrl={apiUrl} diagnose={store.diagnoseConnection}
+          onAllSettings={() => { setMSettingsOpen(false); setSettingsOpen(true) }} userEmail={userEmail} onSignOut={onLogout} onClose={() => setMSettingsOpen(false)}
+        />
+      ) : null}
       {settingsOpen ? (
         <SettingsPanel
           settings={settings.get()} providers={snapshot.providerStatus} onSave={(patch) => { settings.update(patch); store.saveSettings(patch) }} permissionMode={snapshot.permissionMode} onPermissionMode={store.setPermissionMode}

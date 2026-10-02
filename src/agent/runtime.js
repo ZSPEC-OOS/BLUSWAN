@@ -39,7 +39,7 @@ import { checkClaims } from './claimChecker.js'
 
 const log = createLogger('runtime')
 // A finished, cancelled or failed run leaves the conversation open for the next user message.
-const SENDABLE = new Set(['idle', 'completed', 'cancelled', 'error', 'waiting_user'])
+const SENDABLE = new Set(['idle', 'completed', 'cancelled', 'error', 'waiting_user', 'interrupted'])
 
 function toBluswanError(e) {
   if (isBluswanError(e)) return e
@@ -124,11 +124,11 @@ export function createAgentRuntime({
     return next
   }
 
-  function startSession({ workspaceId = null, model } = {}) {
+  function startSession({ workspaceId = null, model, id } = {}) {
     if (workspaceId !== null && workspaces && !workspaces.getWorkspace(workspaceId)) {
       throw new Error(`Unknown workspace: ${workspaceId}`)
     }
-    const session = sessions.create({ workspaceId, model: model ?? getDefaultModelRef(config) })
+    const session = sessions.create({ workspaceId, model: model ?? getDefaultModelRef(config), id })
     agents.set(session.id, createAgentState(session.id, now()))
     emit(session.id, 'session.started', { model: session.model, workspaceId })
     return sessions.get(session.id)
@@ -171,6 +171,8 @@ export function createAgentRuntime({
     else list.push(record)
     if (list.length > MAX_COMMANDS) list.splice(0, list.length - MAX_COMMANDS)
     commandLogs.set(sessionId, list)
+    const { stdout: _o, stderr: _e, ...meta } = record // output stays out of the event stream; fetch it with getCommand
+    emit(sessionId, 'command.completed', meta)
   }
 
   function recordShellCommand(sessionId, call, result, startedAt) {
@@ -275,6 +277,64 @@ export function createAgentRuntime({
     contextEngine.invalidateWorkspace(workspace.id)
     emit(sessionId, 'file.reverted', { path: filePath, action: 'reverted', result: result.action, revision })
     return { ok: true, path: filePath, result: result.action, revision }
+  }
+
+
+  // ─── Persistence hooks (the runtime itself never touches storage) ───────────
+
+  /** Serializable snapshot for persistence: the session plus the bounded command log. */
+  function exportSession(sessionId) {
+    const session = sessions.get(sessionId)
+    if (!session) return null
+    return { session, commands: (commandLogs.get(sessionId) ?? []).map(c => ({ ...c })) }
+  }
+
+  /**
+   * Re-creates a session from persisted state. Nothing from the previous process is running: a session that was
+   * active is registered as `interrupted` (with a `session.interrupted` event) and is never resumed automatically.
+   * @param {{session:object, commands?:object[]}} saved
+   * @param {{note?:object}} [options] `note` is attached to the session.updated event (e.g. workspace drift info)
+   */
+  function restoreSession({ session, commands = [] }, { note = null } = {}) {
+    if (sessions.get(session.id)) throw createError({ code: 'session_busy', message: 'Session is already loaded.' })
+    const wasActive = session.status === 'running' || session.status === 'waiting_permission'
+    sessions.load(wasActive ? { ...session, status: 'interrupted' } : session)
+    agents.set(session.id, createAgentState(session.id, now()))
+    commandLogs.set(session.id, commands.slice(-MAX_COMMANDS))
+    if (wasActive) {
+      // Tool calls the model declared but that never returned (the process vanished) get an explicit "unknown" result,
+      // so the history stays valid for the provider and the model is told to check the workspace instead of assuming.
+      const answered = new Set(sessions.get(session.id).messages.filter(m => m.role === 'tool').map(m => m.toolCallId))
+      for (const m of sessions.get(session.id).messages) {
+        for (const c of m.toolCalls ?? []) {
+          if (answered.has(c.id)) continue
+          sessions.appendMessage(session.id, {
+            role: 'tool', toolCallId: c.id, name: c.name,
+            content: `Tool: ${c.name}\nStatus: interrupted\nThe application stopped before this call returned. It may or may not have taken effect; inspect the workspace (git status / git diff) before relying on it.`,
+            meta: { ok: false, compact: `${c.name} was interrupted; its effect is unknown.`, paths: [], hits: [], changed: [] },
+          })
+        }
+      }
+      sessions.update(session.id, { toolCalls: sessions.get(session.id).toolCalls.map(c => (c.status === 'running' ? { ...c, status: 'interrupted' } : c)) })
+      emit(session.id, 'session.interrupted', { previousStatus: session.status, reason: 'restart' })
+    }
+    if (note) emit(session.id, 'session.updated', { status: sessions.get(session.id).status, restored: true, ...note })
+    return sessions.get(session.id)
+  }
+
+  /**
+   * Brings a restored session in line with the workspace as it is now: the files it may still call "changed", and
+   * validation evidence that no longer describes the code.
+   */
+  function reconcileSession(sessionId, { changedFiles, workspaceChanged = false, changedPaths = [] } = {}) {
+    const session = sessions.get(sessionId)
+    if (!session) return null
+    if (changedFiles) sessions.update(sessionId, { changedFiles })
+    if (workspaceChanged && (session.validation?.results?.length || session.validation?.mutationSeq)) {
+      const paths = changedPaths.length ? changedPaths : ['workspace']
+      setValidation(sessionId, markMutated(validationOf(sessionId), paths.map(path => ({ path: path === 'workspace' ? 'workspace.external' : path, action: 'external' }))))
+    }
+    return sessions.get(sessionId)
   }
 
   // ─── Permissions ────────────────────────────────────────────────────────────
@@ -820,6 +880,9 @@ export function createAgentRuntime({
       }
     },
     listProviders: () => providers.listProviders(),
+    exportSession,
+    restoreSession,
+    reconcileSession,
     getWorkspaceState,
     getFileDiff,
     revertFile,

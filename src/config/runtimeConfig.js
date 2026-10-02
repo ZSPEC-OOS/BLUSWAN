@@ -109,7 +109,7 @@ export function loadRuntimeConfig(env = readEnv()) {
     const envKey = `VITE_BLUSWAN_LIMIT_${key.replace(/[A-Z]/g, c => `_${c}`).toUpperCase()}`
     limits[key] = int(env[envKey], fallback)
   }
-  const deepseekModel = env.VITE_DEEPSEEK_MODEL || env.DEEPSEEK_MODEL || ''
+  const deepseekModel = env.DEEPSEEK_MODEL || env.VITE_DEEPSEEK_MODEL || ''
   return Object.freeze({
     defaultProvider: env.VITE_BLUSWAN_PROVIDER || DEFAULTS.defaultProvider,
     defaultModel: env.VITE_BLUSWAN_MODEL || deepseekModel,
@@ -130,8 +130,9 @@ export function loadRuntimeConfig(env = readEnv()) {
     devLogging: env.VITE_BLUSWAN_DEV_LOGGING === 'true' || !!env.DEV,
     providers: Object.freeze({
       deepseek: Object.freeze({
-        apiKey: env.VITE_DEEPSEEK_API_KEY || env.DEEPSEEK_API_KEY || '',
-        baseUrl: env.VITE_DEEPSEEK_BASE_URL || env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
+        // Secrets are server-side only: a VITE_-prefixed variable is compiled into the browser bundle, so it is never read.
+        apiKey: env.DEEPSEEK_API_KEY || '',
+        baseUrl: env.DEEPSEEK_BASE_URL || env.VITE_DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
         model: deepseekModel,
       }),
     }),

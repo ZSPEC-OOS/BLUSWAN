@@ -56,3 +56,5 @@
 .shell__review { display: flex; } .shell__chip { margin: 0 auto var(--space-2); }
 .changes-chip { font: inherit; font-size: var(--text-xs); color: var(--text); background: var(--surface-elevated); border: 1px solid var(--border-strong); border-radius: 99px; padding: .2rem .7rem; cursor: pointer; }
 .changes-chip:hover { border-color: var(--accent); }
+.reconnect { padding: var(--space-3); border: 1px solid var(--warn-border); background: var(--warn-bg); border-radius: var(--radius); font-size: var(--text-sm); }
+.reconnect__text { margin: 0 0 var(--space-2); color: var(--warning); } .reconnect__input { flex: 1; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: .4rem .55rem; }

@@ -239,3 +239,24 @@ describe('event projection', () => {
     assert.deepEqual(['idle', 'running', 'waiting_permission', 'completed', 'cancelled', 'error'].map(statusFromRuntime), ['ready', 'working', 'waiting', 'completed', 'stopped', 'error'])
   })
 })
+
+describe('restored sessions', () => {
+  const ev = (type, data = {}, i = 0) => ({ id: `e${i}-${type}`, type, sessionId: 's', timestamp: 1000 + i, data })
+  it('an interrupted run closes unfinished activity and offers a way to continue, without claiming completion', () => {
+    const v = projectEvents([
+      ev('user.message', { messageId: 'u', content: 'Do it' }, 1), ev('tool.started', { toolCallId: 't', tool: 'shell', inputSummary: { command: 'sleep 30' } }, 2),
+      ev('session.interrupted', { previousStatus: 'running', reason: 'restart' }, 3),
+    ])
+    assert.equal(v.status, 'interrupted')
+    const out = v.entries.find(e => e.kind === 'outcome')
+    assert.deepEqual([out.outcome, out.text], ['interrupted', 'Run interrupted']); assert.match(out.detail, /continue the conversation/)
+    assert.ok(v.entries.filter(e => e.kind === 'activity').every(g => g.items.every(i => i.status !== 'running')))
+  })
+  it('restore notes: unavailable workspace, branch change, external change; silent otherwise', () => {
+    const notes = (data) => projectEvents([ev('user.message', { messageId: 'u', content: 'x' }, 1), ev('session.updated', { status: 'idle', restored: true, ...data }, 2)]).entries.filter(e => e.kind === 'notice')
+    assert.match(notes({ workspace: 'unavailable', workspaceReason: 'The repository folder no longer exists.' })[0].text, /Reconnect the workspace to continue coding\. The repository folder no longer exists/)
+    assert.match(notes({ workspace: 'ok', branchChanged: { from: 'main', to: 'feature' } })[0].text, /now on branch feature \(this conversation last saw main\)/)
+    assert.match(notes({ workspace: 'ok', workspaceChanged: true })[0].text, /Earlier test results no longer apply/)
+    assert.deepEqual(notes({ workspace: 'ok' }), [])
+  })
+})

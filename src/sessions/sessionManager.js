@@ -1,20 +1,14 @@
-// Owns live session state. Independent of React and Firebase; persistence is
-// delegated to an injected store.
+// Owns live session state. Independent of React, Firebase and storage: persistence is a separate concern
+// (see sessionStore.js), which observes this manager through the runtime's events.
 import { createSession, updateSession, isValidSession, createMessage } from '../protocol/schemas.js'
 import { isValidEvent } from '../protocol/events.js'
-import { createInMemorySessionStore } from './sessionStore.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('session')
 
-export function createSessionManager({ store = createInMemorySessionStore(), now = () => Date.now() } = {}) {
+export function createSessionManager({ now = () => Date.now() } = {}) {
   const sessions = new Map()
   const listeners = new Set()
-
-  function persist(session) {
-    Promise.resolve(store.saveSession(session)).catch(err =>
-      log.warn('persist failed', { sessionId: session.id, message: err?.message }))
-  }
 
   function require(id) {
     const s = sessions.get(id)
@@ -24,7 +18,6 @@ export function createSessionManager({ store = createInMemorySessionStore(), now
 
   function write(session) {
     sessions.set(session.id, session)
-    persist(session)
     return session
   }
 
@@ -35,12 +28,11 @@ export function createSessionManager({ store = createInMemorySessionStore(), now
 
     createSession(init) { return this.create(init) },
 
-    /** Loads a persisted session into the live set. */
-    async restore(id) {
-      const s = await store.loadSession(id)
-      if (!s || !isValidSession(s)) return null
-      sessions.set(s.id, s)
-      return s
+    /** Puts a previously persisted session into the live set (no events are replayed or subscribers notified). */
+    load(session) {
+      if (!isValidSession(session)) throw new Error('Cannot load an invalid session')
+      sessions.set(session.id, session)
+      return session
     },
 
     get(id) { return sessions.get(id) ?? null },
@@ -70,9 +62,8 @@ export function createSessionManager({ store = createInMemorySessionStore(), now
 
     cancel(id) { return write(updateSession(require(id), { status: 'cancelled' }, now())) },
 
-    delete(id) {
+    async delete(id) {
       sessions.delete(id)
-      return Promise.resolve(store.deleteSession(id))
     },
 
     /** @param {(event:object, session:object)=>void} fn */

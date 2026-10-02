@@ -246,7 +246,7 @@ describe('management and readiness', () => {
   })
 
   it('reports setup needs (no model / no key) without a low-level configuration error', async () => {
-    const h = await setup({ validate: () => { throw createError({ code: 'configuration_error', message: 'DeepSeek API key is not configured (set VITE_DEEPSEEK_API_KEY).', provider: 'fake' }) } })
+    const h = await setup({ validate: () => { throw createError({ code: 'configuration_error', message: 'DeepSeek API key is not configured (set DEEPSEEK_API_KEY).', provider: 'fake' }) } })
     assert.deepEqual([h.snap().setup.ready, h.snap().setup.reason], [false, 'no_api_key'])
     const ok = await setup({})
     assert.deepEqual(ok.snap().setup, { ready: true })
@@ -313,21 +313,19 @@ describe('management and readiness', () => {
 })
 
 describe('settings store', () => {
-  it('validates, persists, never exposes the key, and applies overrides on top of the environment', () => {
+  it('keeps only non-secret preferences, validates them, and survives storage failures', () => {
     const mem = new Map()
     const storage = { getItem: k => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v) }
     const s = createSettingsStore({ storage })
-    assert.deepEqual([s.get().permissionMode, s.get().provider, s.get().apiKey], ['auto_edit', 'deepseek', ''])
-    s.update({ permissionMode: 'ask', model: ' deepseek-chat ', apiKey: ' sk-secret ' })
+    assert.deepEqual([s.get().permissionMode, s.get().provider], ['auto_edit', 'deepseek'])
+    s.update({ permissionMode: 'ask', model: ' deepseek-chat ', apiKey: ' sk-secret ' }) // a key is not a setting
     s.update({ permissionMode: 'yolo' }) // invalid → falls back to the default rather than storing garbage
     assert.equal(s.get().permissionMode, 'auto_edit')
     s.update({ permissionMode: 'full_auto' })
-    assert.deepEqual([s.get().model, s.get().apiKey], ['deepseek-chat', 'sk-secret'])
-    assert.equal(s.redacted().apiKey, '[set]')
-    assert.ok(!JSON.stringify(s.redacted()).includes('sk-secret'))
-    assert.deepEqual(s.resolveProviderConfig({ apiKey: 'env-key', baseUrl: 'https://env', model: 'env-model' }), { apiKey: 'sk-secret', baseUrl: 'https://env', model: 'deepseek-chat' })
-    const reloaded = createSettingsStore({ storage })
-    assert.equal(reloaded.get().permissionMode, 'full_auto')
+    assert.equal(s.get().model, 'deepseek-chat')
+    assert.ok(!('apiKey' in s.get()))
+    assert.doesNotMatch(mem.get('bluswan.settings'), /sk-secret|apiKey/)
+    assert.equal(createSettingsStore({ storage }).get().permissionMode, 'full_auto')
     assert.doesNotThrow(() => createSettingsStore({ storage: { getItem() { throw new Error('blocked') }, setItem() { throw new Error('blocked') } } }).update({ model: 'x' }))
   })
 })

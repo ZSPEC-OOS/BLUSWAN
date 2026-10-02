@@ -92,7 +92,7 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride }) {
         <ConversationView
           active={snapshot.active} notice={snapshot.notice} setup={snapshot.setup} canOpenWorkspaces={snapshot.canOpenWorkspaces}
           onSend={send} onStop={store.cancel} onApprove={store.approvePermission} onDeny={store.denyPermission}
-          onOpenSettings={() => setSettingsOpen(true)} onDismissNotice={store.dismissNotice} onOpenPath={openPath} chips={chips}
+          onOpenSettings={() => setSettingsOpen(true)} onDismissNotice={store.dismissNotice} onOpenPath={openPath} chips={chips} connection={snapshot.connection} onReconnectWorkspace={(root) => store.reconnectWorkspace(root)} onRetryLoad={store.retryLoad}
         />
       </div>
       {review && panelOpen && !mobile ? (
@@ -107,7 +107,7 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride }) {
       ) : null}
       {settingsOpen ? (
         <SettingsPanel
-          settings={settings.get()} onSave={settings.update} permissionMode={snapshot.permissionMode} onPermissionMode={store.setPermissionMode}
+          settings={settings.get()} providers={snapshot.providerStatus} onSave={(patch) => { settings.update(patch); store.saveSettings(patch) }} permissionMode={snapshot.permissionMode} onPermissionMode={store.setPermissionMode}
           canOpenWorkspaces={snapshot.canOpenWorkspaces} onOpenWorkspace={store.openWorkspace} setup={snapshot.setup}
           userEmail={userEmail} onSignOut={onLogout} onClose={closeSettings}
         />

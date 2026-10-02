@@ -39,6 +39,13 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
   const ws = createWorkspaceStore({ runtime, notify: invalidate, ...(workspaceStorage !== undefined ? { storage: workspaceStorage } : {}), ...(debounceMs !== undefined ? { debounceMs } : {}) })
   for (const s of runtime.listSessions()) attach(s)
   const unsubscribe = runtime.subscribe((event, session) => {
+    if (session.loadReplaced) { // the full transcript just arrived (or was re-synced): rebuild the projection from it
+      session.loadReplaced = false
+      projectors.delete(session.id); attach(session)
+      ws.refresh(session.id, { immediate: true })
+      invalidate()
+      return
+    }
     const existing = projectors.get(session.id)
     if (existing) existing.push(event)
     else attach(session) // snapshot already includes this event
@@ -50,6 +57,7 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
     if (!workspaceId) return null
     const ws = runtime.listWorkspaces().find(w => w.id === workspaceId)
     if (!ws) return { id: workspaceId, available: false, name: 'Unavailable repository', branch: null }
+    if (ws.available === false) return { id: ws.id, available: false, name: ws.name ?? 'Unavailable repository', branch: ws.repository?.branch ?? null, needsReconnect: true }
     return { id: ws.id, available: true, name: ws.repository?.name ?? ws.name ?? 'Repository', branch: ws.repository?.branch ?? null, isGitRepository: !!ws.repository?.isGitRepository }
   }
 
@@ -58,11 +66,12 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
     const view = p.getView()
     return {
       id: session.id,
-      title: deriveTitle(p.firstUserText()),
+      title: p.firstUserText() ? deriveTitle(p.firstUserText()) : (session.title || 'New chat'),
       status: view.entries.length || view.status !== 'ready' ? view.status : statusFromRuntime(session.status),
       running: BUSY.has(view.status),
       lastActivityAt: view.lastAt ?? session.updatedAt,
-      changedCount: session.changedFiles.length,
+      changedCount: session.changedCount ?? session.changedFiles.length,
+      persistence: runtime.getPersistenceStatus?.(session.id) ?? 'saved',
       workspaceName: workspaceInfo(session.workspaceId)?.name ?? null,
     }
   }
@@ -79,22 +88,28 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
       const review = ws.view(session.id, view.entries)
       active = {
         id: session.id,
-        title: deriveTitle(projectors.get(session.id).firstUserText()),
+        title: projectors.get(session.id).firstUserText() ? deriveTitle(projectors.get(session.id).firstUserText()) : (session.title || 'New chat'),
         view,
+        loading: !!session.loading,
+        loadError: session.loadError ? friendlyError(session.loadError) : null,
+        persistence: runtime.getPersistenceStatus?.(session.id) ?? 'saved',
+        interrupted: view.status === 'interrupted',
         model: session.model,
         workspace,
         changedFiles: session.changedFiles,
         tokenUsage: session.tokenUsage,
-        composer: { disabled: busy || (workspace && !workspace.available), canStop: busy, busy, reason: busy ? (view.status === 'waiting' ? 'Waiting for your approval…' : 'BLUSWAN is working…') : workspace && !workspace.available ? 'This workspace is no longer available. Reconnect the repository to continue.' : null },
+        composer: { disabled: busy || !!session.loading || (workspace && !workspace.available), canStop: busy, busy, reason: session.loading ? 'Restoring this conversation…' : busy ? (view.status === 'waiting' ? 'Waiting for your approval…' : 'BLUSWAN is working…') : workspace && !workspace.available ? 'This workspace is no longer available. Reconnect the repository to continue.' : null },
         workspaceMissing: !!workspace && !workspace.available,
         review,
-        changedCount: review.loaded ? review.diffSummary.files : session.changedFiles.length,
+        changedCount: review.loaded ? review.diffSummary.files : (session.changedCount ?? session.changedFiles.length),
       }
     }
     const model = selectModel() ?? session?.model ?? { provider: 'deepseek', model: '' }
     const readiness = runtime.checkModel ? runtime.checkModel(model) : { ok: true }
     return {
       sessions, activeId, active, notice,
+      connection: runtime.getConnection?.() ?? { state: 'online', offlineIndex: false, reconnects: 0 },
+      providerStatus: runtime.getProviderStatus?.() ?? [],
       workspace: workspaceInfo(session?.workspaceId ?? currentWorkspaceId),
       workspaces: runtime.listWorkspaces(),
       canOpenWorkspaces: runtime.canOpenWorkspaces?.() ?? false,
@@ -149,6 +164,7 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
       activeId = id
       currentWorkspaceId = session.workspaceId
       notice = null
+      runtime.loadSession?.(id) // lazy hydration: the transcript is fetched when a conversation is opened
       ws.refresh(id, { immediate: true })
       invalidate()
       return true
@@ -216,11 +232,22 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
       }
     },
 
+    /** Re-attach a repository that is not available on this host (moved, or opened from another machine). */
+    async reconnectWorkspace(root) {
+      const id = activeId ? runtime.getSession(activeId)?.workspaceId : null
+      if (!id || !runtime.reconnectWorkspace) return { ok: false }
+      try { await runtime.reconnectWorkspace(id, root); invalidate(); ws.refresh(activeId, { immediate: true }); return { ok: true } } catch (e) {
+        setNotice({ kind: 'error', text: e?.message || "Couldn't reconnect that repository.", details: e?.code })
+        return { ok: false }
+      }
+    },
+    async saveSettings(patch) { try { await runtime.saveSettings?.(patch) } catch (e) { setNotice({ kind: 'error', text: e?.message || "Couldn't save settings.", details: e?.code }) } invalidate() },
+    retryLoad: () => { if (activeId) runtime.loadSession?.(activeId, { force: true }) },
     dismissNotice: () => setNotice(null),
     refresh: invalidate,
   }
 
   const first = runtime.listSessions().sort((a, b) => b.updatedAt - a.updatedAt)[0]
-  if (first) { activeId = first.id; currentWorkspaceId = first.workspaceId; ws.refresh(first.id, { immediate: true }) }
+  if (first) { activeId = first.id; currentWorkspaceId = first.workspaceId; runtime.loadSession?.(first.id); ws.refresh(first.id, { immediate: true }) }
   return store
 }

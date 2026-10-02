@@ -1,0 +1,23 @@
+.notice { display: flex; gap: .6rem; padding: .6rem .8rem; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface); font-size: .9rem; }
+.notice--error { border-color: var(--danger-border); background: var(--danger-bg); color: var(--danger-fg); }
+.notice--warning { border-color: var(--warn-border); background: var(--warn-bg); color: var(--warn-fg); }
+.notice--subdued { background: transparent; border-color: transparent; color: var(--muted); font-size: .8rem; padding: .1rem .2rem; }
+.notice__icon { flex: none; width: 1.1rem; text-align: center; }
+.notice__body { min-width: 0; }
+.notice__text { margin: 0; overflow-wrap: anywhere; }
+.notice__details { margin-top: .35rem; font-size: .8rem; color: var(--muted); }
+.notice__details code { display: block; margin-top: .25rem; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); }
+.notice__action { margin-top: .5rem; }
+.empty { margin: auto; max-width: 34rem; padding: 2rem 1rem; text-align: center; color: var(--muted); }
+.empty__title { margin: 0 0 .4rem; color: var(--fg); font-size: 1.35rem; font-weight: 600; }
+.empty__lede { margin: 0 0 1rem; line-height: 1.5; }
+.empty__examples { list-style: none; margin: 0; padding: 0; display: grid; gap: .3rem; font-size: .85rem; opacity: .8; }
+.btn { font: inherit; cursor: pointer; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--fg); padding: .35rem .8rem; }
+.btn:hover:not(:disabled) { background: var(--surface-3); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn--primary { background: var(--accent); border-color: var(--accent); color: #031326; font-weight: 600; }
+.btn--primary:hover:not(:disabled) { background: var(--accent-strong); }
+.btn--danger { border-color: var(--danger-border); color: var(--danger-fg); }
+.btn--ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

@@ -1,0 +1,7 @@
+.topbar { display: flex; align-items: center; gap: .75rem; padding: .45rem .9rem; border-bottom: 1px solid var(--border); background: var(--bg); min-height: 2.9rem; flex-wrap: wrap; }
+.topbar__repo { display: flex; gap: .5rem; align-items: baseline; min-width: 0; } .topbar__repo strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 14rem; }
+.topbar__branch { color: var(--muted); font-family: var(--mono); font-size: .8rem; } .topbar__muted { color: var(--faint); font-size: .85rem; } .topbar__warn { color: var(--warn-fg); font-size: .8rem; }
+.topbar__changed { color: var(--muted); font-size: .8rem; } .topbar__spacer { flex: 1; }
+.topbar__menu { display: none; } .topbar__model { max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .8rem; }
+.topbar select { font: inherit; font-size: .82rem; color: var(--fg); background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: .25rem .4rem; }
+@media (max-width: 760px) { .topbar__menu { display: inline-flex; } }

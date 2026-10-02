@@ -1,0 +1,3 @@
+.shell { display: flex; height: 100vh; height: 100dvh; background: var(--bg); color: var(--fg); }
+.shell__main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.conversation { flex: 1; min-height: 0; display: flex; flex-direction: column; } .conversation__banner { padding: .5rem 1rem 0; max-width: 52rem; width: 100%; margin: 0 auto; }

@@ -36,3 +36,28 @@ export function summarizeInput(input) {
   }
   return out
 }
+
+/**
+ * Small, bounded, secret-free description of a successful result for runtime events (the UI's activity
+ * details). Full outputs stay on the tool message; nothing here carries file bodies.
+ */
+export function summarizeOutput(tool, o) {
+  if (!o || typeof o !== 'object') return {}
+  switch (tool) {
+    case 'read_file': return { path: o.path, lines: o.endLine - o.startLine + 1, totalLines: o.totalLines, truncated: o.truncated }
+    case 'read_many_files': return { count: o.files.filter(f => f.ok).length, failed: o.files.filter(f => !f.ok).length, paths: o.files.filter(f => f.ok).map(f => f.path).slice(0, 20) }
+    case 'list_directory': return { count: o.entries.length }
+    case 'search_files': return { matches: o.matches.length, paths: o.matches.map(m => m.path).slice(0, 10) }
+    case 'grep': return { matches: o.matches.length, files: new Set(o.matches.map(m => m.path)).size }
+    case 'shell': {
+      const tail = redactSecrets(`${o.stderr ?? ''}\n${o.stdout ?? ''}`.trim()).slice(-600)
+      return { exitCode: o.exitCode, timedOut: o.timedOut, truncated: o.truncated, excerpt: tail }
+    }
+    case 'git_status': return { branch: o.branch, clean: o.clean, changed: o.modified.length + o.staged.length + o.deleted.length + o.untracked.length }
+    case 'git_diff': return { files: o.files.length, additions: o.additions, deletions: o.deletions }
+    case 'apply_patch': return { files: o.changedFiles.length, hunks: o.appliedHunks }
+    case 'write_file': return { path: o.path, created: o.created }
+    case 'delete_file': return { path: o.path }
+    default: return {}
+  }
+}

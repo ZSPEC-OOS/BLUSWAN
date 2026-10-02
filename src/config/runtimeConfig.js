@@ -114,6 +114,7 @@ export function loadRuntimeConfig(env = readEnv()) {
     defaultProvider: env.VITE_BLUSWAN_PROVIDER || DEFAULTS.defaultProvider,
     defaultModel: env.VITE_BLUSWAN_MODEL || deepseekModel,
     maxTurns: int(env.VITE_BLUSWAN_MAX_TURNS, DEFAULTS.maxTurns),
+    permissionMode: ['ask', 'auto_edit', 'full_auto'].includes(env.VITE_BLUSWAN_PERMISSION_MODE) ? env.VITE_BLUSWAN_PERMISSION_MODE : 'auto_edit',
     requestTimeoutMs: int(env.VITE_BLUSWAN_REQUEST_TIMEOUT_MS, DEFAULTS.requestTimeoutMs),
     streamTimeoutMs: int(env.VITE_BLUSWAN_STREAM_TIMEOUT_MS, DEFAULTS.streamTimeoutMs),
     maxOutputTokens: int(env.VITE_BLUSWAN_MAX_OUTPUT_TOKENS, DEFAULTS.maxOutputTokens),

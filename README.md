@@ -2,7 +2,7 @@
 
 A chat-first coding agent. The user describes a coding task in natural language; the agent runtime works against a repository through tools and continues naturally from follow-up messages in the same session.
 
-> **Status:** Phase 5 (validation-grounded completion). Editing code no longer implies "done": when the model stops, the runtime checks what changed, runs the project's own safe test/lint/typecheck/build commands (focused first, broader when warranted), feeds failures back to the same model for repair, and finishes only with evidence in hand or an honest record of what could not be verified. DeepSeek is still the **only** production provider. Final chat UX (Phase 6), permission approval, persistence and additional providers are not implemented yet.
+> **Status:** Phase 6 (chat-first UX). The web app is a conversation: session sidebar, streaming transcript, a live activity feed projected from runtime events, real Stop, and permission prompts (Ask / Auto Edit / Full Auto) that pause the agent until you decide. DeepSeek is still the **only** production provider. Changed-files panel, diff viewer, terminal, persistence (reloading loses conversations) and additional providers are not implemented yet.
 
 ## Architecture
 
@@ -33,6 +33,25 @@ user message
 **Provider abstraction.** Provider-specific behavior (endpoints, auth, streaming format, tool schemas, error mapping) lives only in adapters. Adapters expose capabilities and emit provider-neutral events (`text_delta`, `reasoning_status`, `tool_call`, `usage`, `completed`); failures are normalized to `{ code, message, provider, retryable, cause }`.
 
 **Sessions.** A session holds normalized messages, events, tool calls, changed files, status, and token usage. Statuses: `idle`, `running`, `waiting_permission`, `waiting_user`, `completed`, `error`, `cancelled`. Cancellation propagates through an `AbortController` to the provider request.
+
+## Chat UX and permissions (Phase 6)
+
+`src/client/` is organized as `sessions/` (sidebar), `chat/` (transcript, safe Markdown, composer), `activity/` (event projection, tool labels, validation rows), `permissions/`, `status/`, `settings/`, `state/` (framework-free client store) and `shared/`.
+
+- **Data flow:** runtime events → `createProjector()` (incremental, no timers; one row per tool call, one assistant message per stream) → `createClientStore()` snapshot → React via `useSyncExternalStore`. The UI never calls providers or tools; it calls runtime actions (`sendMessage`, `cancelSession`, `approvePermission`, `denyPermission`, `deleteSession`).
+- **Sessions:** new chat, switching (a running session keeps working in the background), delete with confirmation (running sessions are stopped first; repository files are never touched). Titles come from the first message without a model call.
+- **Stop:** invokes real runtime cancellation (provider stream, running shell process group, pending approvals); applied file changes are kept.
+- **Markdown:** own parser, no raw HTML, only `http(s)`/`mailto` links, code blocks with copy.
+
+| Mode | read | workspace write | destructive | dependency change | external effect | prohibited |
+|---|---|---|---|---|---|---|
+| Ask | allow | ask | ask | ask | ask | blocked |
+| Auto Edit (default) | allow | allow | ask | ask | ask | blocked |
+| Full Auto | allow | allow | allow | allow | ask | blocked |
+
+Pending approvals are real: the runtime emits `permission.requested`, the session status becomes `waiting_permission`, and the loop resumes only after "Allow once" (or continues with the denial returned to the model after "Deny"). Prohibited commands never prompt and are shown as "blocked by workspace safety policy". Headless runs (CLI, tests) use `approvals: 'unattended'` and return `permission_required` instead of waiting.
+
+Known limitations: a browser cannot open local folders, so repository tools in the web app need a host that supplies a workspace manager (none is included yet; use `npm run agent -- --workspace <dir>` for repository work). The API key is stored in browser `localStorage`; do not ship a shared key in a production bundle.
 
 ## Validation and completion (Phase 5)
 
@@ -234,6 +253,7 @@ Browser-side execution is temporary: any `VITE_*` value is exposed to the client
 | `npm run build` | Production build |
 | `npm run lint` | ESLint |
 | `npm test` | Unit and integration tests (no network or API key required) |
+| `npm run test:client` | Client store, projection, Markdown, components (SSR), permissions, Phase 6 integration |
 | `npm run test:validation` | Project detection, command discovery/safety, policy, parsing, runners, validation state, completion/recovery, Phase 5 acceptance |
 | `npm run test:context` | Context engine: estimator, budget, summary, relevance, compaction, long sessions, Phase 4 acceptance |
 | `npm run test:agent` | Agent loop, DeepSeek adapter (mocked wire), retries, cancellation, client activity |

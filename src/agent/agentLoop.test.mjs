@@ -163,10 +163,10 @@ describe('agent loop', () => {
       assert.equal(await workspace.exists('src/math.js'), true)
     })
 
-    it('can create and delete files via tools', async () => {
+    it('can create and delete files via tools (Full Auto allows deletions)', async () => {
       const h = harness({
         turns: [reply(call('c1', 'write_file', { path: 'tests/new.test.js', content: 'x' }), call('c2', 'delete_file', { path: 'src/index.js' })), reply(say('ok'))],
-      })
+      }, { config: { permissionMode: 'full_auto' } })
       const done = await h.send('go')
       assert.deepEqual(done.changedFiles, [{ path: 'tests/new.test.js', action: 'created' }, { path: 'src/index.js', action: 'deleted' }])
       assert.deepEqual(h.events.filter(e => e.type === 'file.changed').map(e => [e.data.path, e.data.action, e.data.toolCallId]),

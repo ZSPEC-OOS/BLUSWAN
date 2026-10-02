@@ -1,53 +1,75 @@
-// Chat-first application surface. Renders runtime state and forwards user intent;
-// all execution happens in the agent runtime.
-import { useEffect, useState } from 'react'
-import { createAgentRuntime } from '../agent/runtime.js'
-import { getDefaultModelRef } from '../config/runtimeConfig.js'
-import SessionView from './SessionView.jsx'
-import ChatComposer from './ChatComposer.jsx'
+// Chat-first application shell: conversation sidebar, header, conversation, composer.
+// Everything it shows is projected from runtime state by the client store; it executes nothing itself.
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { ClientStoreProvider, useBluswan } from './state/useClientStore.js'
+import SessionSidebar from './sessions/SessionSidebar.jsx'
+import ChatHeader from './status/ChatHeader.jsx'
+import ConversationView from './chat/ConversationView.jsx'
+import SettingsPanel from './settings/SettingsPanel.jsx'
+import './theme.css'
+import './shell.css'
 
-// `workspaceId` connects the session to a workspace owned by the host (the browser has no
-// filesystem access; a Node host injects a runtime and workspace). Without one the agent can chat
-// but its repository tools are unavailable.
-export default function AppShell({ userEmail, onLogout, runtime: injected, workspaceId = null }) {
-  const [runtime] = useState(() => injected ?? createAgentRuntime())
-  const [sessionId] = useState(() => runtime.startSession({ workspaceId, model: getDefaultModelRef() }).id)
-  const [session, setSession] = useState(() => runtime.getSession(sessionId))
+export function Shell({ settings, userEmail, onLogout }) {
+  const { snapshot, store } = useBluswan()
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [, bump] = useState(0)
+  const started = useRef(false)
+
+  useEffect(() => { // first conversation; the ref keeps StrictMode's double effect from creating two
+    if (started.current) return
+    started.current = true
+    if (!store.getSnapshot().activeId) store.newSession()
+  }, [store])
+
+  useEffect(() => settings.subscribe(() => { store.refresh(); bump(n => n + 1) }), [settings, store])
 
   useEffect(() => {
-    setSession(runtime.getSession(sessionId)) // eslint-disable-line react-hooks/set-state-in-effect
-    return runtime.subscribe((_event, snapshot) => {
-      if (snapshot.id === sessionId) setSession(snapshot)
-    })
-  }, [runtime, sessionId])
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); store.newSession(); document.querySelector('[data-composer]')?.focus() }
+      else if (e.key === 'Escape') setSidebarOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [store])
 
-  const running = session?.status === 'running'
-  const model = session?.model
+  const select = useCallback((id) => { store.selectSession(id); setSidebarOpen(false) }, [store])
+  const send = useCallback((text) => store.sendMessage(text).ok, [store])
+  const closeSettings = useCallback(() => setSettingsOpen(false), [])
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#030b18', color: '#e2e8f0', fontFamily: "-apple-system, 'Segoe UI', sans-serif" }}>
-      <header style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.5rem 1rem', borderBottom: '1px solid #1e293b' }}>
-        <img src="/BLUSWAN-logo-transparent.png" alt="BLUSWAN" style={{ height: 28 }} />
-        <span style={{ color: '#64748b', fontSize: '0.8rem' }}>
-          {model ? `${model.provider} / ${model.model || 'no model configured'}` : ''}
-        </span>
-        <span style={{ marginLeft: 'auto', color: '#64748b', fontSize: '0.8rem' }}>
-          {session?.status ?? ''} {userEmail ? `· ${userEmail}` : ''}
-        </span>
-        {onLogout && <button onClick={onLogout}>Sign out</button>}
-      </header>
-      {!workspaceId && (
-        <div role="status" style={{ background: '#1e293b', color: '#fcd34d', padding: '0.4rem 1rem', fontSize: '0.8rem' }}>
-          No workspace connected — repository tools are unavailable in the browser. Run the agent against a local repository with <code>npm run agent -- --workspace &lt;dir&gt; &quot;your request&quot;</code>.
-        </div>
-      )}
-      <SessionView session={session} />
-      <ChatComposer
-        disabled={!sessionId || running}
-        running={running}
-        onSubmit={(text) => { runtime.sendMessage(sessionId, text).catch(() => {}) /* session_busy etc. surface via session state */ }}
-        onCancel={() => runtime.cancelSession(sessionId)}
+    <div className="shell">
+      <SessionSidebar
+        sessions={snapshot.sessions} activeId={snapshot.activeId} open={sidebarOpen} onClose={() => setSidebarOpen(false)}
+        onNew={() => { store.newSession(); setSidebarOpen(false) }} onSelect={select} onDelete={(id, opts) => store.deleteSession(id, opts)}
       />
+      <div className="shell__main">
+        <ChatHeader
+          active={snapshot.active} workspace={snapshot.active?.workspace ?? snapshot.workspace} model={snapshot.active?.model ?? snapshot.model}
+          permissionMode={snapshot.permissionMode} onPermissionMode={store.setPermissionMode}
+          onOpenSettings={() => setSettingsOpen(true)} onToggleSidebar={() => setSidebarOpen(o => !o)}
+        />
+        <ConversationView
+          active={snapshot.active} notice={snapshot.notice} setup={snapshot.setup} canOpenWorkspaces={snapshot.canOpenWorkspaces}
+          onSend={send} onStop={store.cancel} onApprove={store.approvePermission} onDeny={store.denyPermission}
+          onOpenSettings={() => setSettingsOpen(true)} onDismissNotice={store.dismissNotice}
+        />
+      </div>
+      {settingsOpen ? (
+        <SettingsPanel
+          settings={settings.get()} onSave={settings.update} permissionMode={snapshot.permissionMode} onPermissionMode={store.setPermissionMode}
+          canOpenWorkspaces={snapshot.canOpenWorkspaces} onOpenWorkspace={store.openWorkspace} setup={snapshot.setup}
+          userEmail={userEmail} onSignOut={onLogout} onClose={closeSettings}
+        />
+      ) : null}
     </div>
+  )
+}
+
+export default function AppShell({ store, settings, userEmail, onLogout }) {
+  return (
+    <ClientStoreProvider store={store}>
+      <Shell settings={settings} userEmail={userEmail} onLogout={onLogout} />
+    </ClientStoreProvider>
   )
 }

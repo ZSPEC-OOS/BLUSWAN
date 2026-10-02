@@ -2,7 +2,7 @@
 // head+tail output capture. Never leaves the command's process tree running.
 import { spawn } from 'node:child_process'
 import { WorkspaceError } from './errors.js'
-import { createCommandResult } from '../validation/commandResult.js'
+import { createCommandResult } from './commandResult.js'
 
 const KILL_GRACE_MS = 1000
 const IS_WINDOWS = process.platform === 'win32'

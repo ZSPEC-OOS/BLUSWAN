@@ -197,7 +197,8 @@ describe('runners and engine (real execution)', () => {
   })
 
   it('bounds output while keeping both the beginning and the end', async () => {
-    const r = await run(runTestStep, `node -e "console.log('FIRST-LINE'); console.log('x'.repeat(300000)); console.error('LAST-LINE'); process.exit(1)"`, { max: 1000 })
+    await ws.writeFile('scripts/noisy.mjs', "console.log('FIRST-LINE'); console.log('x'.repeat(300000)); console.error('LAST-LINE'); process.exit(1)\n")
+    const r = await run(runTestStep, 'node scripts/noisy.mjs', { max: 1000 })
     assert.equal(r.outputTruncated, true)
     assert.ok(r.outputExcerpt.length <= 1100)
     assert.match(r.outputExcerpt, /FIRST-LINE|LAST-LINE/)

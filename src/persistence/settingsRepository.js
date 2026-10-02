@@ -5,7 +5,7 @@ import { isPermissionMode, DEFAULT_PERMISSION_MODE } from '../tools/permissionMo
 
 export const sanitizeSettings = (s = {}) => ({
   permissionMode: isPermissionMode(s.permissionMode) ? s.permissionMode : DEFAULT_PERMISSION_MODE,
-  provider: typeof s.provider === 'string' && s.provider ? s.provider : 'deepseek',
+  provider: typeof s.provider === 'string' ? s.provider.slice(0, 40) : '', // '' = no explicit choice; the server picks a configured provider
   model: typeof s.model === 'string' ? s.model.trim().slice(0, 100) : '',
 })
 

@@ -4,7 +4,7 @@
 import { CURRENT_SCHEMA_VERSION, persistenceError } from './persistence.js'
 import { isValidSession, SESSION_STATUSES } from '../protocol/schemas.js'
 import { redactSecrets } from '../utils/redact.js'
-import { deriveTitle } from '../sessions/title.js'
+import { deriveTitle } from '../utils/title.js'
 
 export const LIMITS = Object.freeze({
   maxEvents: 4000, maxToolCalls: 1000, maxToolMessageChars: 20_000, maxCommands: 200, maxStreamChars: 64_000, maxTitleChars: 120,

@@ -30,6 +30,7 @@ import { createLogger } from '../utils/logger.js'
 import { createDefaultToolRegistry } from '../tools/registry.js'
 import { createToolExecutor } from '../tools/executor.js'
 import { toolFailure } from '../tools/result.js'
+import { assertCodingCapable } from '../providers/capabilities.js'
 import { decidePermission, describePermission, isPermissionMode, BLOCKED_MESSAGE, DEFAULT_PERMISSION_MODE } from '../tools/permissionModes.js'
 import { createValidationEngine } from '../validation/validationEngine.js'
 import { createValidationState, markMutated, recordShellResult } from '../validation/validationState.js'
@@ -43,11 +44,14 @@ const SENDABLE = new Set(['idle', 'completed', 'cancelled', 'error', 'waiting_us
 
 function toBluswanError(e) {
   if (isBluswanError(e)) return e
-  log.warn('unexpected runtime failure', { name: e?.name, message: e?.message })
+  log.warn('unexpected runtime failure', { name: e?.name, message: redactSecrets(String(e?.message ?? '')).slice(0, 200) })
   return createError({ code: 'runtime_error', message: e?.message ?? 'Unexpected runtime failure', cause: e })
 }
 
-const sum = (a, b) => ({ input: a.input + b.input, output: a.output + b.output, reasoning: (a.reasoning ?? 0) + (b.reasoning ?? 0), total: a.total + b.total })
+const sum = (a, b) => ({
+  input: a.input + b.input, output: a.output + b.output, reasoning: (a.reasoning ?? 0) + (b.reasoning ?? 0), total: a.total + b.total,
+  ...(a.cachedInput != null || b.cachedInput != null ? { cachedInput: (a.cachedInput ?? 0) + (b.cachedInput ?? 0) } : {}),
+})
 
 export function createAgentRuntime({
   providers = defaultRegistry,
@@ -452,8 +456,30 @@ export function createAgentRuntime({
     if (session.workspaceId) {
       workspace = workspaces?.getWorkspace(session.workspaceId) ?? null
       if (!workspace) throw createError({ code: 'configuration_error', message: `Workspace not found: ${session.workspaceId}` })
+      // acting on a repository needs tool calling: decided from capabilities, never from the provider's name
+      assertCodingCapable(provider.capabilities(session.model.model), { provider: session.model.provider, model: session.model.model })
     }
     return { provider, workspace }
+  }
+
+  /**
+   * Chooses the model for the NEXT run. Allowed only between runs; the canonical history, summary, workspace and
+   * validation state carry over unchanged (nothing provider-specific is stored, so nothing needs migrating).
+   */
+  function setSessionModel(sessionId, model) {
+    const session = sessions.get(sessionId)
+    if (!session) throw createError({ code: 'not_found', message: 'Unknown session.' })
+    if (session.status === 'running' || session.status === 'waiting_permission') {
+      throw createError({ code: 'session_busy', message: 'Stop BLUSWAN before changing the model.' })
+    }
+    if (!model || typeof model.provider !== 'string' || typeof model.model !== 'string' || !model.model) {
+      throw createError({ code: 'invalid_request', message: 'Choose a provider and a model.' })
+    }
+    const provider = providers.getProvider(model.provider) // unknown provider → configuration_error
+    if (session.workspaceId) assertCodingCapable(provider.capabilities(model.model), { provider: model.provider, model: model.model })
+    sessions.update(sessionId, { model: { provider: model.provider, model: model.model } })
+    emit(sessionId, 'session.updated', { status: sessions.get(sessionId).status, model: { provider: model.provider, model: model.model } })
+    return sessions.get(sessionId).model
   }
 
   /** Commits streamed text as an assistant message (used for cancelled/failed turns and stop notices). */
@@ -482,7 +508,7 @@ export function createAgentRuntime({
     try {
       return await completion.decide({ session, workspace, counters: run.counters, userInstructions: userInstructionsFor(session) })
     } catch (e) {
-      log.warn('completion check failed', { message: e?.message })
+      log.warn('completion check failed', { message: redactSecrets(String(e?.message ?? '')).slice(0, 200) })
       return { action: 'complete', reason: 'validation_planning_failed', state: validationOf(sessionId), outcome: 'warning' }
     }
   }
@@ -880,6 +906,9 @@ export function createAgentRuntime({
       }
     },
     listProviders: () => providers.listProviders(),
+    listModels: (providerId) => providers.listModels(providerId),
+    resolveModel: (providerId, modelId) => providers.resolveModel(providerId, modelId),
+    setSessionModel,
     exportSession,
     restoreSession,
     reconcileSession,

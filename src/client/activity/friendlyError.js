@@ -1,7 +1,9 @@
 // Plain-language wording for normalized runtime errors. Raw codes/messages stay available as `details`
 // (shown only in an expandable area); stack traces never reach the conversation.
 
-const PROVIDER_NAME = { deepseek: 'DeepSeek' }
+import { PROVIDER_LABEL } from '../../providers/labels.js'
+
+const PROVIDER_NAME = PROVIDER_LABEL
 const provider = (e) => PROVIDER_NAME[e?.provider] ?? (e?.provider ? String(e.provider) : 'The model provider')
 
 export function friendlyError(error) {
@@ -13,6 +15,8 @@ export function friendlyError(error) {
     case 'provider_timeout': return `${provider(e)} took too long to respond. Try again in a moment.`
     case 'provider_error': return `${provider(e)} returned an error. Try again in a moment.`
     case 'invalid_response': return `${provider(e)} sent a response BLUSWAN couldn't read. Try again.`
+    case 'context_limit': return `The conversation no longer fits ${provider(e)}'s context window. Start a new chat or narrow the request.`
+    case 'unsupported_feature': return e.message || 'This model cannot act as the coding agent. Choose another model.'
     case 'max_turns': return 'BLUSWAN reached its step limit for this request. Work done so far is kept — send a message to continue.'
     case 'loop_detected':
     case 'no_progress': return "BLUSWAN stopped because it wasn't making progress. Work done so far is kept."

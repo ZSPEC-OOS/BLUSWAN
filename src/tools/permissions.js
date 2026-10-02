@@ -10,7 +10,7 @@ const RANK = Object.fromEntries(EFFECTS.map((e, i) => [e, i]))
 export const maxEffect = (a, b) => (RANK[a] >= RANK[b] ? a : b)
 
 /**
- * Effects allowed without human approval. Phase 2 has no approval UI, so
+ * Effects allowed without human approval by the base policy (the runtime's permission modes layer approvals on top);
  * dependency changes and external effects are denied by default; `prohibited`
  * can never be allowed.
  */
@@ -39,6 +39,14 @@ const SCRIPT_READ = /^(test|tests|t|lint|build|typecheck|type-check|check|format
 const NETWORK = new Set(['curl', 'wget', 'nc', 'ncat', 'netcat', 'ssh', 'scp', 'sftp', 'rsync', 'ftp', 'telnet', 'gh', 'docker', 'kubectl', 'terraform', 'aws', 'gcloud', 'az', 'heroku', 'vercel', 'netlify', 'firebase'])
 const PROHIBITED_BIN = new Set(['sudo', 'su', 'doas', 'mkfs', 'fdisk', 'parted', 'shutdown', 'reboot', 'halt', 'poweroff', 'init', 'systemctl', 'mount', 'umount', 'chown', 'kill', 'killall', 'pkill', 'crontab', 'passwd', 'useradd', 'userdel', 'iptables'])
 const DESTRUCTIVE_BIN = new Set(['rm', 'rmdir', 'shred', 'truncate', 'unlink'])
+// Programs that run arbitrary code or other programs: anything they do is unknowable from the command line.
+const RUNS_CODE = new Set(['xargs', 'parallel', 'watch', 'script', 'expect', 'strace', 'ltrace', 'gdb'])
+const INLINE_CODE_FLAG = { node: /^(-e|-p|--eval|--print)$/, nodejs: /^(-e|-p|--eval|--print)$/, python: /^-c$/, python3: /^-c$/, ruby: /^-e$/, perl: /^-[eE]$/, php: /^-r$/, deno: /^(eval|-e)$/, bun: /^(-e|--eval)$/ }
+// Reading these locations (not the workspace) exposes credentials and system state.
+const OUTSIDE_PATH = /^(~|\$HOME|\$\{HOME\}|\/(etc|root|home|Users|var|usr|proc|sys|opt|mnt|boot|bin|sbin|lib|srv|private)(\/|$)|\/dev\/(?!null$|stdout$|stderr$|stdin$)|(\.\.\/)+|\.\.$)/
+const PATH_READERS = new Set(['ls', 'cat', 'head', 'tail', 'wc', 'grep', 'rg', 'diff', 'sort', 'uniq', 'cut', 'stat', 'file', 'tree', 'realpath', 'find', 'sed', 'awk', 'less', 'more', 'xxd', 'od', 'strings', 'cmp', 'md5sum', 'sha256sum'])
+const WRITES_FILES = new Set(['tee', 'cp', 'mv', 'ln', 'install', 'touch', 'mkdir', 'patch'])
+const GIT_HISTORY = new Set(['commit', 'merge', 'rebase', 'cherry-pick', 'revert', 'am', 'stash', 'tag', 'mv', 'rm', 'init', 'config'])
 const DANGEROUS_RM_TARGET = /^(\/|\/\*|~|~\/.*|\$HOME.*|\.|\.\.|\.\/|\.\.\/.*|\*|\.\/\*|\.git|\.git\/.*|\/[^ ]*)$/
 
 function splitTopLevel(command) {
@@ -113,7 +121,19 @@ function classifySimple(tokens, depth) {
     if (ci >= 0 && args[ci + 1] !== undefined && depth < 3) return classifyCommand(args[ci + 1], depth + 1)
     return { effect: 'workspace_write', reason: `${bin} runs arbitrary scripts` }
   }
-  if (bin === 'eval' && depth < 3) return classifyCommand(args.join(' '), depth + 1)
+  if (bin === 'eval') {
+    if (/[$`]/.test(args.join(' ')) || depth >= 3) return { effect: 'destructive', reason: 'eval of dynamic content cannot be inspected' }
+    return classifyCommand(args.join(' '), depth + 1)
+  }
+  if (RUNS_CODE.has(bin)) return { effect: 'destructive', reason: `${bin} runs other commands` }
+  if (INLINE_CODE_FLAG[bin] && args.some(a => INLINE_CODE_FLAG[bin].test(a))) return { effect: 'destructive', reason: `${bin} runs inline code` }
+  if (PATH_READERS.has(bin) && operands.some(o => OUTSIDE_PATH.test(o))) return { effect: 'external_effect', reason: `${bin} reads outside the workspace` }
+  if (WRITES_FILES.has(bin)) {
+    const dests = ['cp', 'mv', 'ln', 'install'].includes(bin) ? operands.slice(-1) : operands
+    if (dests.some(o => OUTSIDE_PATH.test(o))) return { effect: 'prohibited', reason: `${bin} writes outside the workspace` }
+    if (dests.some(o => o.startsWith('/'))) return { effect: 'external_effect', reason: `${bin} writes to an absolute path` }
+    if (['cp', 'mv', 'ln', 'install'].includes(bin) && operands.slice(0, -1).some(o => OUTSIDE_PATH.test(o))) return { effect: 'external_effect', reason: `${bin} reads outside the workspace` }
+  }
   if (NETWORK.has(bin)) return { effect: 'external_effect', reason: `${bin} may perform network or remote operations` }
 
   if (bin === 'git') {
@@ -125,6 +145,8 @@ function classifySimple(tokens, depth) {
     if (gsub === 'restore' && !flags.includes('--staged')) return { effect: 'destructive', reason: 'git restore discards changes' }
     if (gsub === 'branch' && operands.length === 1 && flags.length === 0) return { effect: 'read', reason: 'git branch (list)' }
     if (gsub === 'config' && flags.includes('--get')) return { effect: 'read', reason: 'git config --get' }
+    if (gsub === 'config' && flags.some(f => f === '--global' || f === '--system')) return { effect: 'external_effect', reason: 'git config changes settings outside the repository' }
+    if (GIT_HISTORY.has(gsub)) return { effect: 'destructive', reason: `git ${gsub} changes repository history or settings; BLUSWAN never commits on its own` }
     if (GIT_READ.has(gsub)) return { effect: 'read', reason: `git ${gsub}` }
     if (GIT_WRITE.has(gsub)) return { effect: 'workspace_write', reason: `git ${gsub} modifies the repository` }
     return { effect: 'workspace_write', reason: `unrecognized git subcommand: ${gsub}` }
@@ -171,7 +193,7 @@ function classifySimple(tokens, depth) {
   if (bin === 'make') return SCRIPT_READ.test(sub ?? '') ? { effect: 'read', reason: `make ${sub}` } : { effect: 'workspace_write', reason: 'make target may write files' }
   if (bin === 'find') {
     if (args.includes('-delete')) return { effect: 'destructive', reason: 'find -delete' }
-    if (args.some(a => ['-exec', '-execdir', '-ok'].includes(a))) return { effect: 'workspace_write', reason: 'find -exec runs commands' }
+    if (args.some(a => ['-exec', '-execdir', '-ok', '-okdir'].includes(a))) return { effect: 'destructive', reason: 'find -exec runs other commands' }
     return { effect: 'read', reason: 'find' }
   }
   if (bin === 'sed') return flags.some(f => /^-[a-zA-Z]*i/.test(f) || f.startsWith('--in-place')) ? { effect: 'workspace_write', reason: 'sed -i' } : { effect: 'read', reason: 'sed' }

@@ -2,20 +2,22 @@
 // Runs the BLUSWAN agent against a local repository from the terminal.
 //
 //   DEEPSEEK_API_KEY=... DEEPSEEK_MODEL=... npm run agent -- --workspace ../my-repo "Fix the failing parser test"
+//   npm run agent -- --provider anthropic --model <model> "…"      (credentials: <PROVIDER>_API_KEY, server-side env)
 //
 // Streams assistant text and tool activity; Ctrl-C stops the run (completed edits are kept).
 import { createAgentRuntime } from '../src/agent/runtime.js'
 import { createNodeWorkspaceManager } from '../src/workspace/node.js'
-import { describeToolCall } from '../src/client/activity.js'
-import { getDefaultModelRef } from '../src/config/runtimeConfig.js'
+import { toolLabel as describeToolCall } from '../src/client/activity/toolDisplay.js'
+import { getDefaultModelRef, getProviderConfig } from '../src/config/runtimeConfig.js'
 
 const args = process.argv.slice(2)
 const flag = (name) => { const i = args.indexOf(name); return i >= 0 ? args.splice(i, 2)[1] : null }
 const root = flag('--workspace') ?? process.cwd()
 const model = flag('--model')
+const providerFlag = flag('--provider')
 const prompt = args.join(' ').trim()
 if (!prompt) {
-  console.error('Usage: npm run agent -- [--workspace DIR] [--model NAME] "request"')
+  console.error('Usage: npm run agent -- [--workspace DIR] [--provider ID] [--model NAME] "request"')
   process.exit(2)
 }
 
@@ -23,7 +25,8 @@ const workspaces = createNodeWorkspaceManager()
 const runtime = createAgentRuntime({ workspaces })
 const workspace = await workspaces.openWorkspace({ root })
 const base = getDefaultModelRef()
-const session = runtime.startSession({ workspaceId: workspace.id, model: { provider: base.provider, model: model ?? base.model } })
+const provider = providerFlag ?? base.provider
+const session = runtime.startSession({ workspaceId: workspace.id, model: { provider, model: model ?? (providerFlag ? getProviderConfig(provider).model : base.model) } })
 
 runtime.subscribe(session.id, (e) => {
   switch (e.type) {

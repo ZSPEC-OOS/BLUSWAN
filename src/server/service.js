@@ -9,9 +9,9 @@ import { createAgentRuntime } from '../agent/runtime.js'
 import { createSessionManager } from '../sessions/sessionManager.js'
 import { createSessionAutosave } from '../sessions/sessionStore.js'
 import { createSessionHydrator } from '../sessions/sessionHydrator.js'
-import { deriveTitle } from '../sessions/title.js'
-import { createProviderRegistry } from '../providers/registry.js'
-import { createDeepSeekProvider } from '../providers/deepseek.js'
+import { deriveTitle } from '../utils/title.js'
+import { createProviderRegistry, createStandardProviders } from '../providers/registry.js'
+import { isCodingCapable } from '../providers/capabilities.js'
 import { createNodeWorkspaceManager } from '../workspace/node.js'
 import { snapshotWorkspace, restoreWorkspace } from '../workspace/workspaceRestore.js'
 import { createSettingsRepository } from '../persistence/settingsRepository.js'
@@ -48,13 +48,14 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
     return (async () => {
       const settingsRepo = createSettingsRepository(persistence, { userId: user.id })
       const stored = await persistence.loadSettings(user.id).catch(() => null)
-      const settings = stored ? await settingsRepo.load() : { permissionMode: config.permissionMode, provider: 'deepseek', model: '' }
+      const settings = stored ? await settingsRepo.load() : { permissionMode: config.permissionMode, provider: '', model: '' }
       const workspaces = createNodeWorkspaceManager({ allowedRoots })
-      const provider = providerFactory ? providerFactory(user, credentials) : createDeepSeekProvider({
-        getConfig: () => ({ ...getProviderConfig('deepseek', config), ...(credentials.hasCredential('deepseek', user) ? credentials.getCredential('deepseek', user) : { apiKey: '' }) }),
+      const adapters = providerFactory ? [].concat(providerFactory(user, credentials)) : createStandardProviders({
+        // credentials are read per request, on the server, and handed only to the adapter
+        getConfig: (id) => ({ ...getProviderConfig(id, config), ...(credentials.hasCredential(id, user) ? credentials.getCredential(id, user) : { apiKey: '' }) }),
       })
       const runtime = createAgentRuntime({
-        providers: createProviderRegistry([provider]), sessions: createSessionManager(), workspaces, approvals: 'interactive',
+        providers: createProviderRegistry(adapters), sessions: createSessionManager(), workspaces, approvals: 'interactive',
         config: { ...config, permissionMode: settings.permissionMode },
       })
       const listeners = new Set()
@@ -76,6 +77,23 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
   const ctxOf = (user) => {
     if (!contexts.has(user.id)) contexts.set(user.id, buildContext(user))
     return contexts.get(user.id)
+  }
+
+  /** Every selectable model with what it can do and whether its provider is configured here. */
+  function modelCatalog(ctx, user) {
+    return ctx.runtime.listProviders().flatMap(provider => ctx.runtime.listModels(provider).map(m => ({
+      provider, id: m.id, displayName: m.displayName, capabilities: m.capabilities, known: m.known,
+      configured: credentials.hasCredential(provider, user), codingCapable: isCodingCapable(m.capabilities),
+    })))
+  }
+  /** The model a new session starts with: the user's choice if usable, else the first configured provider's model. */
+  function defaultModel(ctx, user) {
+    const described = credentials.describe(user)
+    const pick = (provider, model) => ({ provider, model: model || described.find(p => p.provider === provider)?.model || '' })
+    const chosen = ctx.settings.model ? pick(ctx.settings.provider, ctx.settings.model) : null
+    if (chosen && credentials.hasCredential(chosen.provider, user)) return chosen
+    const first = described.find(p => p.configured && p.model) ?? described.find(p => p.configured)
+    return first ? pick(first.provider, first.model) : pick(config.defaultProvider, config.defaultModel)
   }
 
   const notFound = (what = 'session') => createError({ code: 'not_found', message: `That ${what} was not found.` })
@@ -122,7 +140,7 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
     async bootstrap(user) {
       const ctx = await ctxOf(user)
       return {
-        user, hostId, providers: credentials.describe(user), settings: ctx.settings, permissionMode: ctx.runtime.getPermissionMode(),
+        user, hostId, providers: credentials.describe(user), models: modelCatalog(ctx, user), defaultModel: defaultModel(ctx, user), settings: ctx.settings, permissionMode: ctx.runtime.getPermissionMode(),
         workspaces: await listWorkspaces(ctx), canOpenWorkspaces: true, sessions: await service.listSessions(user, {}),
       }
     },
@@ -147,8 +165,7 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
         throw createError({ code: 'invalid_request', message: 'That session id is not available.' })
       }
       if (workspaceId && !ctx.workspaces.getWorkspace(workspaceId)) throw createError({ code: 'workspace_not_found', message: 'That repository is not connected.' })
-      const credential = { model: credentials.describe(user).find(p => p.provider === 'deepseek')?.model ?? '' }
-      const chosen = model?.model ? model : { provider: 'deepseek', model: ctx.settings.model || credential.model || config.defaultModel || '' }
+      const chosen = model?.model ? { provider: model.provider, model: model.model } : defaultModel(ctx, user)
       const s = ctx.runtime.startSession({ workspaceId, model: chosen, id })
       return { session: service.snapshot(s), persistence: 'unsaved' }
     },
@@ -172,6 +189,12 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
       return { accepted: true }
     },
 
+    /** Applies to the next run; history, summary, workspace and validation state are unchanged. */
+    async setModel(user, id, model) {
+      const ctx = await ctxOf(user)
+      await requireSession(ctx, id)
+      return { model: ctx.runtime.setSessionModel(id, model) }
+    },
     async cancel(user, id) { const ctx = await ctxOf(user); await requireSession(ctx, id); return { cancelled: ctx.runtime.cancelSession(id) !== false } },
     async approve(user, id, permissionId) { const ctx = await ctxOf(user); await requireSession(ctx, id); return { ok: ctx.runtime.approvePermission(id, permissionId) } },
     async deny(user, id, permissionId) { const ctx = await ctxOf(user); await requireSession(ctx, id); return { ok: ctx.runtime.denyPermission(id, permissionId) } },
@@ -190,7 +213,7 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
     async getSettings(user) { return { ...(await ctxOf(user)).settings, permissionMode: (await ctxOf(user)).runtime.getPermissionMode() } },
     async saveSettings(user, patch) {
       const ctx = await ctxOf(user)
-      const next = { ...ctx.settings, ...(patch.model !== undefined ? { model: String(patch.model) } : {}), ...(isPermissionMode(patch.permissionMode) ? { permissionMode: patch.permissionMode } : {}) }
+      const next = { ...ctx.settings, ...(patch.model !== undefined ? { model: String(patch.model) } : {}), ...(typeof patch.provider === 'string' && ctx.runtime.listProviders().includes(patch.provider) ? { provider: patch.provider } : {}), ...(isPermissionMode(patch.permissionMode) ? { permissionMode: patch.permissionMode } : {}) }
       if (isPermissionMode(patch.permissionMode)) ctx.runtime.setPermissionMode(patch.permissionMode)
       await ctx.settingsRepo.save(next)
       ctx.settings = await ctx.settingsRepo.load()
@@ -242,6 +265,9 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
       ctx.listeners.add(listener)
       return () => ctx.listeners.delete(listener)
     },
+
+    /** Open event streams for a user (diagnostics and leak tests). */
+    listenerCount: async (user) => (contexts.has(user.id) ? (await ctxOf(user)).listeners.size : 0),
 
     persistenceMetrics: async (user) => ({ ...(await ctxOf(user)).autosave.metrics(), ...metrics, hydrationMsAvg: metrics.hydrations ? Math.round(metrics.hydrationMsTotal / metrics.hydrations) : 0 }),
     async flush(user) { if (contexts.has(user.id)) await (await ctxOf(user)).autosave.flush() },

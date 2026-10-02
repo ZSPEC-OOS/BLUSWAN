@@ -22,6 +22,8 @@ export function createRemoteRuntime({
   const commandOutput = new Map() // `${sessionId}:${commandId}` → record | 'loading'
   let workspaces = []
   let providers = []
+  let models = []
+  let defaultModel = { provider: '', model: '' }
   let permissionMode = 'auto_edit'
   let user = null
   let connection = 'connecting' // connecting | online | reconnecting | offline
@@ -55,7 +57,7 @@ export function createRemoteRuntime({
   // ─── mirror ────────────────────────────────────────────────────────────────
 
   function blank(id, fields = {}) {
-    return { id, workspaceId: null, model: { provider: 'deepseek', model: '' }, status: 'idle', events: [], messages: [], toolCalls: [], changedFiles: [], runs: [], validation: null,
+    return { id, workspaceId: null, model: { ...defaultModel }, status: 'idle', events: [], messages: [], toolCalls: [], changedFiles: [], runs: [], validation: null,
       tokenUsage: { ...EMPTY_USAGE }, startedAt: Date.now(), updatedAt: Date.now(), hydrated: false, loading: false, persistence: 'saved', title: null, commands: [], buffered: [], ...fields }
   }
 
@@ -181,7 +183,7 @@ export function createRemoteRuntime({
     async init() {
       try {
         const data = await request('GET', '/api/bootstrap')
-        user = data.user; providers = data.providers; permissionMode = data.permissionMode; workspaces = data.workspaces
+        user = data.user; providers = data.providers; models = data.models ?? []; defaultModel = data.defaultModel ?? defaultModel; permissionMode = data.permissionMode; workspaces = data.workspaces
         for (const item of data.sessions.items) applyIndex(item)
         offlineIndex = false
         await cache?.save(userKey, data.sessions.items).catch(() => {})
@@ -207,7 +209,7 @@ export function createRemoteRuntime({
     /** Optimistic: the session exists locally at once; the server learns of it with the first message. */
     startSession({ workspaceId = null, model } = {}) {
       const id = uuid()
-      const s = blank(id, { workspaceId, model: model ?? { provider: 'deepseek', model: '' }, hydrated: true, draft: true, persistence: 'unsaved' })
+      const s = blank(id, { workspaceId, model: model ?? { ...defaultModel }, hydrated: true, draft: true, persistence: 'unsaved' })
       sessions.set(id, s)
       return s
     },
@@ -246,6 +248,17 @@ export function createRemoteRuntime({
       return { ok: true }
     },
     listProviders: () => providers.map(p => p.provider),
+    getModels: () => models,
+    getDefaultModel: () => defaultModel,
+    /** The model for the session's NEXT run. Drafts change locally; stored sessions ask the server (it refuses mid-run). */
+    async setSessionModel(id, model) {
+      const s = sessions.get(id)
+      if (!s) throw Object.assign(new Error('That conversation is gone.'), { code: 'not_found' })
+      if (s.draft) { s.model = { provider: model.provider, model: model.model }; touch(s); return s.model }
+      const res = await request('PUT', `/api/sessions/${encodeURIComponent(id)}/model`, model)
+      s.model = res.model; touch(s)
+      return res.model
+    },
     getProviderStatus: () => providers,
 
     canOpenWorkspaces: () => true,
@@ -288,7 +301,7 @@ export function createRemoteRuntime({
       closed = true; streamAbort?.abort()
       await request('POST', '/api/logout', {}).catch(() => {})
       await cache?.clear(userKey).catch(() => {})
-      sessions.clear(); commandOutput.clear(); seen.clear(); listeners.clear(); workspaces = []; providers = []
+      sessions.clear(); commandOutput.clear(); seen.clear(); listeners.clear(); workspaces = []; providers = []; models = []
     },
     close() { closed = true; streamAbort?.abort() },
   }

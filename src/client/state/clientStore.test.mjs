@@ -317,7 +317,7 @@ describe('settings store', () => {
     const mem = new Map()
     const storage = { getItem: k => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v) }
     const s = createSettingsStore({ storage })
-    assert.deepEqual([s.get().permissionMode, s.get().provider], ['auto_edit', 'deepseek'])
+    assert.deepEqual([s.get().permissionMode, s.get().provider], ['auto_edit', ''])
     s.update({ permissionMode: 'ask', model: ' deepseek-chat ', apiKey: ' sk-secret ' }) // a key is not a setting
     s.update({ permissionMode: 'yolo' }) // invalid → falls back to the default rather than storing garbage
     assert.equal(s.get().permissionMode, 'auto_edit')

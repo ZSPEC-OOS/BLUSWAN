@@ -1,4 +1,4 @@
-// Phase 5: completion grounded in validation evidence. Real runtime, session manager, context engine,
+// Completion grounded in validation evidence. Real runtime, session manager, context engine,
 // tool executor, validation engine and workspace; only the model is scripted.
 import { describe, it, afterEach } from 'node:test'
 import assert from 'node:assert/strict'

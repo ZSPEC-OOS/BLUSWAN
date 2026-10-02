@@ -2,29 +2,20 @@
 //
 // ProviderAdapter {
 //   id: string
-//   capabilities(model): Capabilities
-//   normalizeMessages(messages): native messages
+//   listModels(): [{ provider, id, displayName, capabilities, known }]
+//   capabilities(model): Capabilities               (src/providers/capabilities.js)
+//   normalizeMessages(messages): native messages    (canonical → provider wire format)
 //   normalizeTools(tools): native tool schemas
+//   validate?(model): void                          (credential / model checks before any request)
 //   stream(request, handlers): Promise<void>
 // }
 //
-// request:  { model, messages, tools, signal, temperature, maxOutputTokens }
+// request:  { model, messages, tools, signal, temperature, maxOutputTokens, metadata? }
 // handlers: { onEvent(providerEvent) }   // events from ./normalize.js
-// stream() resolves after a `completed` event and rejects with a BluswanError
-// (see protocol/schemas.js) on any failure; adapters never leak native errors.
+// stream() resolves after a `completed` event and rejects with a BluswanError (protocol/schemas.js, mapped by
+// ./errors.js) on any failure; adapters never leak native errors, native tool formats or native messages.
 
-export const DEFAULT_CAPABILITIES = Object.freeze({
-  streaming: true,
-  toolCalling: false,
-  reasoning: false,
-  parallelToolCalls: false,
-  contextWindow: 8192,
-  maxOutputTokens: 2048,
-})
-
-export function defineCapabilities(overrides = {}) {
-  return Object.freeze({ ...DEFAULT_CAPABILITIES, ...overrides })
-}
+export { DEFAULT_CAPABILITIES, defineCapabilities } from './capabilities.js'
 
 const REQUIRED_METHODS = ['capabilities', 'normalizeMessages', 'normalizeTools', 'stream']
 

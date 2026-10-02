@@ -87,7 +87,7 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride }) {
         <ChatHeader
           active={snapshot.active} workspace={snapshot.active?.workspace ?? snapshot.workspace} model={snapshot.active?.model ?? snapshot.model}
           permissionMode={snapshot.permissionMode} onPermissionMode={store.setPermissionMode}
-          onOpenSettings={() => setSettingsOpen(true)} onToggleSidebar={() => setSidebarOpen(o => !o)} onToggleChanges={toggleChanges} panelOpen={panelOpen}
+          onOpenSettings={() => setSettingsOpen(true)} onToggleSidebar={() => setSidebarOpen(o => !o)} onToggleChanges={toggleChanges} panelOpen={panelOpen} models={snapshot.models} onChooseModel={store.chooseModel}
         />
         <ConversationView
           active={snapshot.active} notice={snapshot.notice} setup={snapshot.setup} canOpenWorkspaces={snapshot.canOpenWorkspaces}

@@ -6,7 +6,7 @@
 //   tool_call_start     { index, id, name }
 //   tool_call_delta     { index, id, argumentsDelta }
 //   tool_call_complete  { id, name, input, inputError?, rawArguments }
-//   usage               { input, output, reasoning, total }
+//   usage               { input, output, reasoning, total, cachedInput? }   (cachedInput only when the provider reports it)
 //   completed           { finishReason }
 //   error               { error }                (normalized BluswanError)
 
@@ -26,10 +26,13 @@ export const toolCallComplete = ({ id, name, input = {}, inputError, rawArgument
 export const completed = (finishReason = 'stop') => ({ type: 'completed', finishReason })
 export const errorEvent = (error) => ({ type: 'error', error })
 
-export function normalizeUsage({ input = 0, output = 0, reasoning = 0, total } = {}) {
+export function normalizeUsage({ input = 0, output = 0, reasoning = 0, cachedInput, total } = {}) {
   const i = Number(input) || 0
   const o = Number(output) || 0
-  return { input: i, output: o, reasoning: Number(reasoning) || 0, total: total === undefined ? i + o : Number(total) || 0 }
+  return {
+    input: i, output: o, reasoning: Number(reasoning) || 0, total: total === undefined ? i + o : Number(total) || 0,
+    ...(cachedInput != null && Number.isFinite(Number(cachedInput)) ? { cachedInput: Number(cachedInput) } : {}),
+  }
 }
 
 export const usage = (u) => ({ type: 'usage', ...normalizeUsage(u) })

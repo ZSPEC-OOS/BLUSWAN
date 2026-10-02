@@ -4,7 +4,7 @@
 import { isPermissionMode, DEFAULT_PERMISSION_MODE } from '../../tools/permissionModes.js'
 
 const KEY = 'bluswan.settings'
-const DEFAULTS = Object.freeze({ permissionMode: DEFAULT_PERMISSION_MODE, provider: 'deepseek', model: '' })
+const DEFAULTS = Object.freeze({ permissionMode: DEFAULT_PERMISSION_MODE, provider: '', model: '' })
 
 function readStorage(storage) {
   try { return JSON.parse(storage?.getItem(KEY) ?? 'null') ?? {} } catch { return {} }
@@ -16,7 +16,7 @@ export function createSettingsStore({ storage = globalThis.localStorage ?? null,
   // Only known, non-secret fields survive: anything else found in storage (an old `apiKey`, say) is dropped on the next write.
   const sanitize = (v) => ({
     permissionMode: isPermissionMode(v.permissionMode) ? v.permissionMode : DEFAULTS.permissionMode,
-    provider: typeof v.provider === 'string' && v.provider ? v.provider : DEFAULTS.provider,
+    provider: typeof v.provider === 'string' ? v.provider.slice(0, 40) : DEFAULTS.provider,
     model: typeof v.model === 'string' ? v.model.trim().slice(0, 100) : '',
   })
   let value = Object.freeze(sanitize({ ...DEFAULTS, ...defaults, ...readStorage(storage) }))

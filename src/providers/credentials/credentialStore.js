@@ -9,8 +9,10 @@
 // service must be loaded at startup and cached.
 import { createError } from '../../protocol/schemas.js'
 
-const LABEL = { deepseek: 'DeepSeek' }
-const ENV_NAME = { deepseek: 'DEEPSEEK_API_KEY' }
+import { PROVIDER_LABEL } from '../labels.js'
+
+const LABEL = PROVIDER_LABEL
+const ENV_NAME = Object.fromEntries(Object.keys(PROVIDER_LABEL).map(p => [p, `${p.toUpperCase()}_API_KEY`]))
 
 export const missingCredential = (provider) => createError({
   code: 'configuration_error', provider,

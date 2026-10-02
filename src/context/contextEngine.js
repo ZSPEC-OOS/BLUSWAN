@@ -39,7 +39,7 @@ export function createContextEngine({ estimator = defaultEstimator, config = {},
     for (const k of [...workspaceMemo.keys()]) if (k.startsWith(`${workspaceId}:`)) workspaceMemo.delete(k)
   }
 
-  /** Hook for future dynamic tool exposure; Phase 4 exposes the full core set. */
+  /** Hook for dynamic tool exposure; currently the full core set is offered. */
   const selectTools = (tools) => tools
 
   /**

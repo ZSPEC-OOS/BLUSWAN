@@ -10,13 +10,12 @@ import {
 import { loadRuntimeConfig, redactConfig } from '../config/runtimeConfig.js'
 
 describe('provider registry', () => {
-  it('registers DeepSeek by default', () => {
-    assert.ok(defaultRegistry.hasProvider('deepseek'))
-    assert.deepEqual(defaultRegistry.listProviders(), ['deepseek'])
+  it('registers every supported provider by default', () => {
+    assert.deepEqual(defaultRegistry.listProviders(), ['deepseek', 'kimi', 'openai', 'anthropic'])
     assert.equal(defaultRegistry.getProvider('deepseek').id, 'deepseek')
   })
   it('throws a normalized error for unknown providers', () => {
-    assert.throws(() => defaultRegistry.getProvider('kimi'), e => e.code === 'configuration_error')
+    assert.throws(() => defaultRegistry.getProvider('mistral'), e => e.code === 'configuration_error')
   })
   it('rejects duplicate registration and invalid adapters', () => {
     const r = createProviderRegistry([createFakeProvider()])

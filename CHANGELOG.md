@@ -7,6 +7,32 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ---
 
+## [3.0.0]
+
+A rebuild around a single provider-neutral agent runtime.
+
+### Added
+- One agent loop with streaming tool use, cancellation, bounded recovery and a completion cycle that validates changes with the project's own checks.
+- Providers: DeepSeek, Kimi, OpenAI and Anthropic behind one contract (capabilities, canonical events, normalized errors and usage), with a shared contract test suite and a provider-neutral evaluation harness.
+- Workspace abstraction with safe file/search/patch/shell/git tools, conservative command classification, and permission modes (Ask, Auto Edit, Full Auto) with real approvals.
+- Context engine: token budgeting, deterministic session summary, compaction, repository awareness.
+- Validation engine: project detection, focused-then-broad plans, failure classification, stale-evidence tracking.
+- Chat-first UI: sessions, streaming activity, permission prompts, Stop, changed files, unified diffs, command and validation details, single-file revert, responsive layout.
+- Durable sessions: autosave, hydration, interrupted-run handling, workspace reconciliation, schema migrations; file, Firestore and memory backends.
+- Authenticated server (HTTP + Server-Sent Events) holding all provider credentials.
+
+### Removed
+- The former V1/V2 execution engines, task/cycle dashboards, feature flags, browser-side provider-key storage, the unauthenticated dev command bridge, and the associated services, components, tests and Python orchestration prototypes.
+
+### Security
+- Provider keys are server-side only; browser storage holds none, and keys left by earlier versions are deleted at startup.
+
+---
+
+# Earlier history
+
+The entries below describe the former V1/V2 architecture and are kept for reference only.
+
 ## [2.0.0] — 2026-05-14
 
 ### Summary

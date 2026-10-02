@@ -1,4 +1,4 @@
-// The whole Phase 8 stack: browser store → remote runtime → HTTP/SSE → server runtime → tools/git/validation → storage.
+// The whole stack: browser store → remote runtime → HTTP/SSE → server runtime → tools/git/validation → storage.
 // "Restarting" = a new server and a new browser runtime over the same storage. Only the model is scripted.
 import { describe, it, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
@@ -27,11 +27,11 @@ afterEach(async () => { while (cleanups.length) await cleanups.pop()() })
 const until = async (pred, ms = 10000) => { const t0 = Date.now(); while (!(await pred())) { if (Date.now() - t0 > ms) throw new Error('timeout'); await new Promise(r => setTimeout(r, 5)) } }
 const scripted = (...turns) => { let n = 0; return (req) => (req.messages.filter(m => m.role === 'user').at(-1)?.content.startsWith('FOLLOW') ? reply(say('Continuing from where we left off.')) : turns[n++]?.(req) ?? reply(say('done'))) }
 
-async function startServer({ persistence, respond, userId = 'alice', mode = 'full_auto' }) {
+async function startServer({ persistence, respond, userId = 'alice', mode = 'full_auto', providerIds = ['deepseek'] }) {
   const service = createBluswanService({
     persistence, hostId: 'host-1', allowedRoots: [os.tmpdir()], config: { ...loadRuntimeConfig({}), permissionMode: mode },
-    credentials: createCredentialStore({ deepseek: { apiKey: SECRET, baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' } }),
-    providerFactory: () => createFakeProvider({ id: 'deepseek', respond }),
+    credentials: createCredentialStore(Object.fromEntries(providerIds.map(id => [id, { apiKey: SECRET, baseUrl: `https://${id}.example.test`, model: id === 'deepseek' ? 'deepseek-chat' : 'kimi-k2-thinking' }]))),
+    providerFactory: () => providerIds.map(id => { const model = id === 'deepseek' ? 'deepseek-chat' : 'kimi-k2-thinking'; const p = createFakeProvider({ id, respond: (req, n, emit) => respond({ ...req, providerId: id }, n, emit) }); return { ...p, stream: p.stream, listModels: () => [{ provider: id, id: model, displayName: model, capabilities: p.capabilities(model), known: true }] } }),
     autosave: { debounceMs: 10, retry: { attempts: 2, baseMs: 1 }, sleep: async () => {} },
   })
   const server = http.createServer(createHttpHandler({ service, auth: createNoAuth({ userId }), heartbeatMs: 50 }))
@@ -60,7 +60,7 @@ async function startClient(server, { cache = null, fetchSpy = null, userKey = 'a
 
 const fixture = async () => { const fx = await createFixtureRepo(); cleanups.push(() => fx.cleanup()); return fx }
 
-describe('Phase 8 end to end: persist → restart → restore → continue', () => {
+describe('Durable end to end: persist → restart → restore → continue', () => {
   it('a coding session survives a full restart of server and browser, with workspace, evidence and context intact', async () => {
     const fx = await fixture()
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bluswan-e2e-')); cleanups.push(() => fs.rm(dir, { recursive: true, force: true }))
@@ -212,6 +212,44 @@ describe('lazy loading, reconnect and de-duplication', () => {
     await offline.logout()
     assert.equal(await cache.load('alice'), null)
     assert.deepEqual(offline.listSessions(), [])
+  })
+})
+
+describe('choosing a model from the UI', () => {
+  it('applies to the next run of the open conversation, keeps its history, and survives a restart', async () => {
+    const fx = await fixture()
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bluswan-e2e-')); cleanups.push(() => fs.rm(dir, { recursive: true, force: true }))
+    const seen = []
+    const respond = (req) => { seen.push([req.providerId, req.model, req.messages.filter(m => m.role === 'user').length]); return scripted(() => reply(say(`answer from ${req.providerId}`)))(req) }
+    const s1 = await startServer({ persistence: createFilePersistence({ dir }), respond, providerIds: ['deepseek', 'kimi'] })
+    const c1 = await startClient(s1)
+    await c1.store.openWorkspace({ root: fx.root })
+    assert.deepEqual(c1.snap().models.map(m => m.provider).filter((p, i, a) => a.indexOf(p) === i), ['deepseek', 'kimi'])
+    assert.equal(c1.snap().active.model.provider, 'deepseek')
+    await c1.store.sendMessage('first question').done; await until(() => c1.view().status === 'completed')
+    await c1.store.chooseModel({ provider: 'kimi', model: 'kimi-k2-thinking' })
+    await until(() => c1.snap().active.model.provider === 'kimi')
+    await c1.store.sendMessage('second question').done; await until(() => c1.view().entries.filter(e => e.kind === 'assistant').length === 2)
+    assert.deepEqual(seen, [['deepseek', 'deepseek-chat', 1], ['kimi', 'kimi-k2-thinking', 2]], 'the second run used the new provider, with the earlier turn in its history')
+    assert.deepEqual(c1.view().entries.filter(e => e.kind === 'assistant').map(e => e.text), ['answer from deepseek', 'answer from kimi'])
+    await s1.service.flush({ id: 'alice' }); c1.store.destroy(); c1.runtime.close(); await s1.kill()
+
+    const s2 = await startServer({ persistence: createFilePersistence({ dir }), respond, providerIds: ['deepseek', 'kimi'] })
+    const c2 = await startClient(s2)
+    await until(() => c2.snap().active && c2.view().entries.length > 0)
+    assert.equal(c2.snap().active.model.provider, 'kimi', 'the conversation remembers its model')
+    assert.equal(c2.snap().sessions[0].id, c2.snap().activeId)
+  })
+  it('refuses to change the model while a run is active and says so', async () => {
+    const fx = await fixture()
+    const s = await startServer({ persistence: createMemoryPersistence(), respond: scripted(() => reply(call('sh', 'shell', { command: 'sleep 30' }))), providerIds: ['deepseek', 'kimi'] })
+    const c = await startClient(s)
+    await c.store.openWorkspace({ root: fx.root })
+    c.store.sendMessage('wait')
+    await until(() => c.view().entries.some(e => e.kind === 'activity' && e.items.some(i => i.status === 'running')))
+    await c.store.chooseModel({ provider: 'kimi', model: 'kimi-k2-thinking' })
+    assert.equal(c.snap().active.model.provider, 'deepseek')
+    c.store.cancel(); await until(() => c.view().status === 'stopped')
   })
 })
 

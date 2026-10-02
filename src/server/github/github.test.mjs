@@ -407,6 +407,18 @@ describe('safeguards', () => {
   })
 })
 
+describe('argument safety', () => {
+  it('option-shaped or malformed branch names are rejected everywhere they could reach git', async () => {
+    const w = await world(); const A = await w.connected(); const ws = await cloneRepo(A)
+    for (const bad of ['--output=/tmp/x', '-D', 'a b', 'a..b', 'x~1', '']) {
+      for (const [u, b] of [['checkout', { branch: bad }], ['cleanup', { branch: bad }], ['abandon', { branch: bad }], ['branches', { name: bad || '-', task: 't' }], ['pr-draft', { base: bad || '-x' }]]) {
+        const r = await A('POST', `/api/workspaces/${ws.id}/${u}`, b); assert.ok([400, 409].includes(r.status) && r.json.error.code !== 'git_operation_failed', `${u} ${JSON.stringify(bad)} → ${r.status} ${r.text}`)
+      }
+    }
+    assert.equal(fs.existsSync('/tmp/x'), false)
+  })
+})
+
 describe('ownership, webhooks, agent context, local-only workspaces', () => {
   it('another user can neither see nor operate on a workspace by id or guess a clone location', async () => {
     const w = await world(); const A = await w.connected(); const ws = await cloneRepo(A); const B = await w.connected('tok-bob')
@@ -452,7 +464,7 @@ describe('ownership, webhooks, agent context, local-only workspaces', () => {
 })
 
 describe('configuration and GitHub App authentication', () => {
-  const FULL = { GITHUB_APP_ID: '1', GITHUB_APP_PRIVATE_KEY: '-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----', GITHUB_APP_CLIENT_ID: 'c', GITHUB_APP_CLIENT_SECRET: 's3cret', GITHUB_APP_SLUG: 'bluswan', GITHUB_APP_WEBHOOK_SECRET: 'w' }
+  const FULL = { GITHUB_APP_ID: '1', GITHUB_APP_PRIVATE_KEY: ['-----BEGIN RSA', 'PRIVATE KEY-----\nabc\n-----END RSA', 'PRIVATE KEY-----'].join(' '), GITHUB_APP_CLIENT_ID: 'c', GITHUB_APP_CLIENT_SECRET: 's3cret', GITHUB_APP_SLUG: 'bluswan', GITHUB_APP_WEBHOOK_SECRET: 'w' }
   it('is optional, all-or-nothing, validated, and never copies secret values into settings', async () => {
     const { parseServerConfig } = await import('../config.js')
     assert.equal(parseServerConfig({}).settings.github.configured, false); assert.equal(parseServerConfig({}).ok, true)

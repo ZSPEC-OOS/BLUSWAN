@@ -85,6 +85,13 @@ export function createGithubFeature({
       log.info('github operation', { op: name, repo, user: hashUser(user.id), ms: now() - t0, result })
     }
   }
+  /** Branch names reach git as arguments: refuse anything git itself would not accept as a branch, and anything option-shaped. */
+  async function assertBranchName(name) {
+    if (typeof name !== 'string' || !name || name.startsWith('-') || name.length > 200 || (await git(null, ['check-ref-format', '--branch', name], { okCodes: [0, 1, 128] })).code !== 0) {
+      throw createError({ code: 'invalid_request', message: 'That is not a valid branch name.' })
+    }
+    return name
+  }
   const tokenOf = async (installationId) => appAuth.installationToken(installationId)
   const G = (ws, args, opts = {}) => git(ws.root, args, { webUrl, identity, ...opts })
 
@@ -342,7 +349,7 @@ export function createGithubFeature({
         const existing = (await G(ws, ['for-each-ref', '--format=%(refname:short)', 'refs/heads', 'refs/remotes/origin'])).stdout.split('\n').map(x => x.replace(/^origin\//, ''))
         let branch = String(name ?? '').trim()
         if (branch) {
-          if ((await git(null, ['check-ref-format', '--branch', branch], { okCodes: [0, 1, 128] })).code !== 0 || branch.startsWith('-')) throw createError({ code: 'invalid_request', message: 'That is not a valid branch name.' })
+          await assertBranchName(branch)
           if (existing.includes(branch)) throw createError({ code: 'branch_exists', message: `A branch named ${branch} already exists.` })
         } else branch = suggestBranchName(title, existing)
         progress(`Creating ${branch}`); await G(ws, ['checkout', '-b', branch, doc.defaultBranch], { signal })
@@ -355,7 +362,7 @@ export function createGithubFeature({
     async checkout(user, wsId, { branch } = {}) {
       const { ctx, ws, doc } = await resolveWs(user, wsId)
       return operation(user, ctx, { name: 'checkout', key: `ws:${wsId}`, workspaceId: wsId, repo: doc ? `${doc.owner}/${doc.repo}` : null, mutates: true }, async ({ progress, signal }) => {
-        if (typeof branch !== 'string' || branch.startsWith('-') || (await git(null, ['check-ref-format', '--branch', branch], { okCodes: [0, 1, 128] })).code !== 0) throw createError({ code: 'invalid_request', message: 'That is not a valid branch name.' })
+        await assertBranchName(branch)
         progress('Checking repository state'); assertSafe(await readState(ws, doc), { allowDetached: true })
         if (!(await localBranchExists(ws, branch))) {
           if (doc) { progress('Fetching latest from GitHub'); await fetchOrigin(ws, doc, signal) }
@@ -440,6 +447,7 @@ export function createGithubFeature({
       const { ctx, ws, doc } = await resolveWs(user, wsId, { githubRequired: true })
       const s = await readState(ws, doc)
       const baseBranch = base || doc.defaultBranch
+      if (base) await assertBranchName(base)
       const log = await G(ws, ['log', `origin/${baseBranch}..HEAD`, '--format=%s', '-n', '20'], { okCodes: [0, 128] })
       const subjects = log.stdout.split('\n').filter(Boolean)
       const session = sessionId ? ctx.runtime.getSession(sessionId) : null
@@ -456,6 +464,7 @@ export function createGithubFeature({
         const s = await readState(ws, doc); assertSafe(s, { allowDirty: true })
         if (s.isDefault) throw createError({ code: 'protected_branch', message: 'Create a task branch first; pull requests come from task branches.' })
         const baseBranch = base || doc.defaultBranch
+        if (base) await assertBranchName(base)
         if (!String(title ?? '').trim()) throw createError({ code: 'invalid_request', message: 'Give the pull request a title.' })
         if (!(await remoteBranchExists(ws, s.branch))) throw createError({ code: 'invalid_request', message: 'Push the branch to GitHub before creating a pull request.' })
         const token = await tokenFor(doc); const repoPath = `/repos/${encodeURIComponent(doc.owner)}/${encodeURIComponent(doc.repo)}`
@@ -488,6 +497,7 @@ export function createGithubFeature({
         // a retry (for example after confirming a forced delete) runs from the default branch: continue the task that is merged but not yet cleaned up
         const pending = before.isDefault ? (await persistence.listDocs(user.id, 'github_tasks', { limit: 200 })).filter(t => t.workspaceId === wsId && t.pullRequest && t.workflowStatus !== 'completed_merged' && t.workflowStatus !== 'abandoned').sort((a, b2) => b2.updatedAt - a.updatedAt)[0] : null
         const b = branch ?? pending?.taskBranch ?? before.branch
+        if (branch !== undefined) await assertBranchName(branch)
         if (!b || b === doc.defaultBranch) throw createError({ code: 'protected_branch', message: 'Only a completed task branch can be cleaned up, never the default branch.' })
         const task0 = await getTask(user, wsId, b)
         if (!task0?.pullRequest) throw createError({ code: 'pull_request_not_merged', message: 'This branch has no pull request. Create one, merge it on GitHub, then clean up.' })
@@ -537,6 +547,7 @@ export function createGithubFeature({
       const { ctx, ws, doc } = await resolveWs(user, wsId, { githubRequired: true })
       return operation(user, ctx, { name: 'abandon', key: `ws:${wsId}`, workspaceId: wsId, repo: `${doc.owner}/${doc.repo}`, mutates: true }, async ({ progress, signal }) => {
         const s = await readState(ws, doc); const b = branch ?? s.branch
+        if (branch !== undefined) await assertBranchName(branch)
         if (!b || b === doc.defaultBranch) throw createError({ code: 'protected_branch', message: 'The default branch cannot be abandoned.' })
         assertSafe(s, { allowDetached: true })
         const task = await getTask(user, wsId, b)

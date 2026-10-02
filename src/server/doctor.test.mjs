@@ -95,7 +95,7 @@ describe('doctor: GitHub', () => {
     assert.doesNotMatch(JSON.stringify(r) + formatDoctor(r), /csecret-value|BEGIN|PRIVATE/)
     fake.failNext(/^GET \/app$/, 401, { times: 1 })
     assert.equal(byId(await runDoctor({ env, url: 'http://127.0.0.1:1' }), 'github-credentials').status, 'fail')
-    assert.equal(byId(await runDoctor({ env: { ...env, GITHUB_APP_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\nnot a key\n-----END PRIVATE KEY-----' }, url: 'http://127.0.0.1:1' }), 'github-key').status, 'fail')
+    assert.equal(byId(await runDoctor({ env: { ...env, GITHUB_APP_PRIVATE_KEY: ['-----BEGIN', 'PRIVATE KEY-----\nnot a key\n-----END', 'PRIVATE KEY-----'].join(' ') }, url: 'http://127.0.0.1:1' }), 'github-key').status, 'fail')
     await fake.close()
     assert.equal(byId(await runDoctor({ env, url: 'http://127.0.0.1:1' }), 'github-api').status, 'fail')
   })

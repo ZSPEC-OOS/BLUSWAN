@@ -26,6 +26,14 @@ Individual suites: `test:providers` · `test:agent` · `test:context` · `test:t
 - [ ] Sign in with a real account, open a repository, run one change end to end, reload, restart the runtime, confirm the conversation returns.
 - [ ] Phone check (Mode B): load the page, send a message, background the tab, return — it reconnects.
 
+## GitHub (only if enabled for this deployment)
+
+- [ ] `npm run doctor`: `GitHub App credentials are valid`, API reachable, clone root writable, git available.
+- [ ] Workspace root and data directory are on **persistent** storage (not `/tmp`).
+- [ ] With a real account and a throw-away repository: Connect → Clone & Open → Create Task Branch → one change → Commit → Push → Create Pull Request → merge on GitHub → Sync Main & Clean Up → Start New Task.
+- [ ] Webhook delivery shows 202 (redeliver a recent one); an unsigned request returns 401.
+- [ ] The GitHub App has only the permissions in [GITHUB.md](GITHUB.md). `npm audit` reviewed.
+
 ## Optional live provider checks (billable; report each result individually)
 
 ```bash

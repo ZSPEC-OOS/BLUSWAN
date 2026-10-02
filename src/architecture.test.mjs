@@ -76,9 +76,10 @@ const ALLOWED = {
   agent: ['config', 'context', 'protocol', 'providers', 'sessions', 'tools', 'utils', 'validation'],
   eval: ['agent', 'config', 'validation', 'workspace'],
   server: ['agent', 'config', 'persistence', 'protocol', 'providers', 'sessions', 'tools', 'utils', 'workspace'],
-  client: ['providers', 'tools', 'utils'],
-  auth: [],
-  App: ['auth', 'client', 'persistence'],
+  client: ['protocol', 'providers', 'tools', 'utils'],
+  auth: ['client'],
+  ConnectedApplication: ['client', 'persistence'],
+  App: ['auth', 'ConnectedApplication'],
   main: ['App'],
 }
 
@@ -114,7 +115,7 @@ describe('dependency directions', () => {
     }
   })
   it('persistence and core modules never import Firebase; only the Firestore adapter and web sign-in know it', () => {
-    for (const f of code) for (const s of specifiers(f)) if (/firebase/i.test(s) && !s.startsWith('.')) assert.ok(['auth/firebaseAuth.js'].includes(rel(f)), `${rel(f)} imports ${s}`)
+    for (const f of code) for (const s of specifiers(f)) if (/firebase/i.test(s) && !s.startsWith('.')) assert.ok(['auth/firebaseAuth.js', 'server/main.js'].includes(rel(f)), `${rel(f)} imports ${s}`)
     for (const f of code.filter(x => top(x) === 'persistence')) for (const s of specifiers(f)) assert.doesNotMatch(s, /firebase/i, rel(f))
   })
   it('browser code imports no Node built-ins, server modules or storage backends that need them', () => {

@@ -207,7 +207,7 @@ describe('lazy loading, reconnect and de-duplication', () => {
     assert.deepEqual(offline.listSessions().map(x => x.title), ['Hello there'])
     assert.equal(offline.getConnection().offlineIndex, true)
     const other = createRemoteRuntime({ baseUrl: s1.base, cache, userKey: 'bob', fetch: async () => { throw new TypeError('offline') } })
-    await assert.rejects(() => other.init(), /Cannot reach/)
+    await assert.rejects(() => other.init(), /could not reach|Cannot reach/)
 
     await offline.logout()
     assert.equal(await cache.load('alice'), null)

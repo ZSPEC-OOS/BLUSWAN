@@ -5,6 +5,8 @@ import { ClientStoreProvider, useBluswan } from './state/useClientStore.js'
 import SessionSidebar from './sessions/SessionSidebar.jsx'
 import ChatHeader from './status/ChatHeader.jsx'
 import ConversationView from './chat/ConversationView.jsx'
+import ConnectionBanner from './status/ConnectionBanner.jsx'
+import DiagnosticsPanel from './status/DiagnosticsPanel.jsx'
 import SettingsPanel from './settings/SettingsPanel.jsx'
 import WorkspacePanel from './workspace/WorkspacePanel.jsx'
 import ResizablePanel from './shared/ResizablePanel.jsx'
@@ -16,10 +18,11 @@ import './theme.css'
 import './workspace/workspace.css'
 import './shell.css'
 
-export function Shell({ settings, userEmail, onLogout, mobileOverride }) {
+export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = '' }) {
   const { snapshot, store } = useBluswan()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [diagOpen, setDiagOpen] = useState(false)
   const [, bump] = useState(0)
   const started = useRef(false)
   const mediaMobile = useMediaQuery('(max-width: 900px)')
@@ -84,6 +87,8 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride }) {
         onNew={() => { store.newSession(); setSidebarOpen(false) }} onSelect={select} onDelete={(id, opts) => store.deleteSession(id, opts)}
       />
       <div className="shell__main">
+        <ConnectionBanner connection={snapshot.connection} onRetry={store.retryConnection} onSignIn={onLogout} onDetails={() => setDiagOpen(v => !v)} />
+        {diagOpen && snapshot.connection.state !== 'online' ? <div className="conversation__banner"><DiagnosticsPanel connection={snapshot.connection} apiUrl={apiUrl} diagnose={store.diagnoseConnection} /></div> : null}
         <ChatHeader
           active={snapshot.active} workspace={snapshot.active?.workspace ?? snapshot.workspace} model={snapshot.active?.model ?? snapshot.model}
           permissionMode={snapshot.permissionMode} onPermissionMode={store.setPermissionMode}
@@ -117,10 +122,10 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride }) {
   )
 }
 
-export default function AppShell({ store, settings, userEmail, onLogout, mobileOverride }) {
+export default function AppShell({ store, settings, userEmail, onLogout, mobileOverride, apiUrl = '' }) {
   return (
     <ClientStoreProvider store={store}>
-      <Shell settings={settings} userEmail={userEmail} onLogout={onLogout} mobileOverride={mobileOverride} />
+      <Shell settings={settings} userEmail={userEmail} onLogout={onLogout} mobileOverride={mobileOverride} apiUrl={apiUrl} />
     </ClientStoreProvider>
   )
 }

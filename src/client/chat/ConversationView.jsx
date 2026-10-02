@@ -7,7 +7,7 @@ import ReconnectWorkspace from '../workspace/ReconnectWorkspace.jsx'
 const DEV = typeof import.meta !== 'undefined' && !!import.meta.env?.DEV
 
 /** The primary surface: transcript (messages + activity + approvals) and the composer for one conversation. */
-export default function ConversationView({ active, notice, setup, canOpenWorkspaces, onSend, onStop, onApprove, onDeny, onOpenSettings, onDismissNotice, onOpenPath, chips = null, connection = null, onReconnectWorkspace, onRetryLoad }) {
+export default function ConversationView({ active, notice, setup, canOpenWorkspaces, onSend, onStop, onApprove, onDeny, onOpenSettings, onDismissNotice, onOpenPath, chips = null, onReconnectWorkspace, onRetryLoad }) {
   if (!active) return <main className="conversation" />
   const { view, composer, workspace } = active
   return (
@@ -21,9 +21,6 @@ export default function ConversationView({ active, notice, setup, canOpenWorkspa
         <div className="conversation__banner">
           <ErrorNotice tone="subdued" text="No repository is connected, so BLUSWAN can chat but cannot read or change files." />
         </div>
-      ) : null}
-      {connection && connection.state !== 'online' ? (
-        <div className="banner-offline" role="status">{connection.offlineIndex ? 'Offline — showing your saved session list.' : 'Connection lost — reconnecting…'}</div>
       ) : null}
       {active.workspaceMissing && onReconnectWorkspace ? (
         <div className="conversation__banner"><ReconnectWorkspace name={workspace?.name} onReconnect={onReconnectWorkspace} /></div>

@@ -12,6 +12,8 @@
     "test:context": "node --test \"src/context/*.test.mjs\" \"src/agent/phase4.integration.test.mjs\"",
     "test:agent": "node --test \"src/agent/*.test.mjs\" \"src/providers/*.test.mjs\" \"src/client/*.test.mjs\" \"src/client/*/*.test.mjs\"",
     "test:client": "node --test \"src/client/*.test.mjs\" \"src/client/*/*.test.mjs\" \"src/agent/permissions.test.mjs\"",
+    "test:diff": "node --test \"src/client/workspace/diffParser.test.mjs\" \"src/agent/workspaceReview.test.mjs\"",
+    "test:workspace-ui": "node --test \"src/client/workspace/workspace.test.mjs\" \"src/client/phase7.integration.test.mjs\"",
     "test:deepseek": "node scripts/deepseek-smoke.mjs",
     "agent": "node scripts/agent.mjs",
     "test:workspace": "node --test \"src/workspace/*.test.mjs\"",

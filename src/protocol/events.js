@@ -14,6 +14,7 @@ export const EVENT_TYPES = Object.freeze([
   'tool.completed',
   'tool.failed',
   'file.changed',
+  'file.reverted',
   'command.started',
   'command.output',
   'command.completed',

@@ -2,7 +2,7 @@
 
 A chat-first coding agent. The user describes a coding task in natural language; the agent runtime works against a repository through tools and continues naturally from follow-up messages in the same session.
 
-> **Status:** Phase 6 (chat-first UX). The web app is a conversation: session sidebar, streaming transcript, a live activity feed projected from runtime events, real Stop, and permission prompts (Ask / Auto Edit / Full Auto) that pause the agent until you decide. DeepSeek is still the **only** production provider. Changed-files panel, diff viewer, terminal, persistence (reloading loses conversations) and additional providers are not implemented yet.
+> **Status:** Phase 7 (review workspace). On top of the Phase 6 chat, a right-hand panel (a sheet on mobile) shows what BLUSWAN changed — git-backed changed files with exact line counts, per-file unified diffs, command output, validation details — and lets you revert a single file after confirmation. DeepSeek is still the **only** production provider. Persistence (reloading loses conversations), a commit/push workflow, an interactive terminal and additional providers are not implemented yet.
 
 ## Architecture
 
@@ -33,6 +33,20 @@ user message
 **Provider abstraction.** Provider-specific behavior (endpoints, auth, streaming format, tool schemas, error mapping) lives only in adapters. Adapters expose capabilities and emit provider-neutral events (`text_delta`, `reasoning_status`, `tool_call`, `usage`, `completed`); failures are normalized to `{ code, message, provider, retryable, cause }`.
 
 **Sessions.** A session holds normalized messages, events, tool calls, changed files, status, and token usage. Statuses: `idle`, `running`, `waiting_permission`, `waiting_user`, `completed`, `error`, `cancelled`. Cancellation propagates through an `AbortController` to the provider request.
+
+## Review workspace (Phase 7)
+
+`src/client/workspace/` renders the review surface; the runtime owns the data.
+
+- **Source of truth:** `runtime.getWorkspaceState(sessionId)` reads `git status` + `git diff --numstat HEAD` (rename-aware; untracked files counted directly) and returns kinds (modified / added / untracked / deleted / renamed), per-file and total `+/−`, branch and a `revision` that advances on any mutation. Outside Git it falls back to the files the session changed and says so ("Session-tracked"); diffs and revert then need Git, and the panel shows current file contents instead.
+- **Diffs:** `runtime.getFileDiff(sessionId, path)` returns the unified diff of one file against `HEAD` (staged + unstaged). Diffs are fetched only for the selected file, parsed into files → hunks → typed lines (`parseDiff`), cached per workspace revision, and rendered progressively (800 lines at a time). Binary files, truncated diffs, empty diffs and load errors have explicit states.
+- **Refresh:** the client store refreshes through one debounced path on `file.changed`, `file.reverted`, `validation.completed`, `session.completed/cancelled/failed` and shell completion, and when the window regains focus. Git state wins over the optimistic activity feed.
+- **Commands:** the runtime keeps a bounded, secret-redacted log of shell and validation commands (`listCommands`, `getCommand`): exit code, duration, stdout/stderr, timeout/cancel, truncation. The UI strips terminal escape sequences and renders output as plain text; it is read-only inspection, not a terminal.
+- **Validation:** only checks that ran are shown; a result from before the latest change reads **Stale**, never Passed. Diagnostics link to changed files when locations are known.
+- **Revert (user-driven only):** `runtime.revertFile(sessionId, path)` after an explicit confirmation. It restores the file from `HEAD` (index and working tree); a file that is new or untracked is removed. It never resets, cleans, or touches other files, is refused while a run is active, and is not available to the model. It updates `session.changedFiles`, marks validation stale, invalidates context/summary state and emits `file.reverted`.
+- **Layout:** desktop shows sessions · conversation · resizable, collapsible workspace panel (Ctrl/Cmd+Shift+D; closed until opened, width and open state persist locally). Below 900px the panel becomes a sheet reached from a "N files changed" chip, with list → diff drill-down; Escape closes it and focus returns to the opener. Activity rows link to the diff, command output or validation details using `file.changed` metadata and tool-call ids.
+
+Limitations: the panel shows the repository's git state, which includes changes made outside the session (marked "earlier" when they predate it); no commit/push/branch UI, no editor, no interactive terminal.
 
 ## Chat UX and permissions (Phase 6)
 
@@ -253,6 +267,8 @@ Browser-side execution is temporary: any `VITE_*` value is exposed to the client
 | `npm run build` | Production build |
 | `npm run lint` | ESLint |
 | `npm test` | Unit and integration tests (no network or API key required) |
+| `npm run test:diff` | Diff parser, terminal-text sanitizer, git changes, per-file diff, revert, command log |
+| `npm run test:workspace-ui` | Workspace panels, store and the Phase 7 end-to-end review scenario |
 | `npm run test:client` | Client store, projection, Markdown, components (SSR), permissions, Phase 6 integration |
 | `npm run test:validation` | Project detection, command discovery/safety, policy, parsing, runners, validation state, completion/recovery, Phase 5 acceptance |
 | `npm run test:context` | Context engine: estimator, budget, summary, relevance, compaction, long sessions, Phase 4 acceptance |

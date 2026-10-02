@@ -198,6 +198,10 @@ export function createProjector() {
       case 'tool.completed': onToolCompleted(d); break
       case 'tool.failed': onToolFailed(d); break
       case 'file.changed': onFileChanged(d); break
+      case 'file.reverted':
+        closeAll()
+        add({ kind: 'notice', id: `n:${++seq}`, tag: 'revert', tone: 'subdued', text: `You reverted ${d.path}.`, path: d.path })
+        break
       case 'validation.started': thinking = false; onValidationStarted(d); break
       case 'validation.completed': onValidationCompleted(d); break
       case 'permission.requested':

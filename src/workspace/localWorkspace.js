@@ -97,7 +97,19 @@ export async function createLocalWorkspace({ root, id = `ws_${newId()}`, name, l
     },
 
     gitStatus: () => git.status(),
-    gitDiff: async opts => git.diff({ ...opts, path: opts?.path ? normalizeRelativePath(opts.path) : '' }),
+    gitDiff: async opts => git.diff({ ...opts, path: opts?.path ? normalizeRelativePath(opts.path) : '', alsoPaths: (opts?.alsoPaths ?? []).map(normalizeRelativePath) }),
+    /** Changed files with kinds and line counts, from git (throws git_not_repository outside a repository). */
+    gitChanges: () => git.changes(),
+    /** Discards the uncommitted changes of one file (restores it from HEAD, or removes a new file). */
+    async revertFile(rel) {
+      const clean = normalizeRelativePath(rel)
+      await resolve(clean) // path safety: must stay inside the workspace
+      try {
+        return await git.restoreFile(clean)
+      } finally {
+        index.invalidate()
+      }
+    },
 
     /** Fresh repository metadata (branch/HEAD may change while the workspace is open). */
     refreshRepository: () => detectRepository({ root: rootReal, git, name }),

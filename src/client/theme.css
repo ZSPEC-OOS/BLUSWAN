@@ -14,3 +14,13 @@ html, body, #root { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--fg); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
 * { box-sizing: border-box; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* Design tokens (single source for every surface) */
+:root {
+  --surface-elevated: var(--surface-2);
+  --text: var(--fg); --text-muted: var(--muted); --text-faint: var(--faint);
+  --success: var(--ok); --warning: var(--warn-fg); --danger: var(--danger-fg);
+  --diff-add-bg: rgba(74, 222, 128, .10); --diff-del-bg: rgba(248, 113, 113, .12); --terminal-bg: #050d1b;
+  --space-1: .25rem; --space-2: .5rem; --space-3: .75rem; --space-4: 1rem; --space-5: 1.5rem;
+  --text-xs: .75rem; --text-sm: .85rem; --text-md: 1rem;
+}

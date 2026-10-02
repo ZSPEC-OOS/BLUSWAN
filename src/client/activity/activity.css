@@ -19,3 +19,6 @@
 .status { display: inline-flex; align-items: center; gap: .45rem; font-size: .8rem; color: var(--muted); }
 .status__dot { width: .55rem; height: .55rem; border-radius: 50%; background: var(--faint); } .status--working .status__dot, .status--waiting .status__dot { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; } .status--waiting .status__dot { background: var(--warn-fg); }
 .status--completed .status__dot { background: var(--ok); } .status--error .status__dot { background: var(--danger-fg); } .status--stopped .status__dot { background: var(--faint); border-radius: 2px; }
+.act { position: relative; } .act__links { position: absolute; right: var(--space-2, .5rem); top: .15rem; display: flex; gap: .25rem; }
+.act__link { font: inherit; font-size: .72rem; color: var(--accent); background: transparent; border: 1px solid var(--border); border-radius: 99px; padding: 0 .55em; cursor: pointer; }
+.act__link:hover { border-color: var(--accent); background: var(--surface-2); }

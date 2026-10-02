@@ -1,6 +1,7 @@
 // Git access through the local `git` executable (no shell, argv only).
 import { execFile } from 'node:child_process'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { WorkspaceError } from './errors.js'
 import { summarizeDiff } from './diff.js'
 
@@ -63,6 +64,53 @@ export function parseStatusPorcelain(raw) {
   return result
 }
 
+
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+const MAX_COUNTED_FILE_BYTES = 2 * 1024 * 1024
+
+/** Parses `git diff --numstat -z` (rename-aware): [{path, from?, additions, deletions, binary}]. */
+export function parseNumstat(raw) {
+  const out = []
+  const tokens = raw.split('\0')
+  for (let i = 0; i < tokens.length; i++) {
+    const m = /^(\d+|-)\t(\d+|-)\t(.*)$/s.exec(tokens[i])
+    if (!m) continue
+    const binary = m[1] === '-'
+    const entry = { additions: binary ? 0 : Number(m[1]), deletions: binary ? 0 : Number(m[2]), binary }
+    if (m[3] === '') { // rename/copy: the next two tokens are the old and new paths
+      out.push({ ...entry, from: tokens[i + 1], path: tokens[i + 2] })
+      i += 2
+    } else out.push({ ...entry, path: m[3] })
+  }
+  return out
+}
+
+/** Kind of change for one porcelain entry. */
+function classify({ index, worktree }) {
+  if (index === 'U' || worktree === 'U' || (index === 'A' && worktree === 'A') || (index === 'D' && worktree === 'D')) return 'conflicted'
+  if (index === '?' ) return 'untracked'
+  if (index === 'R' || index === 'C') return 'renamed'
+  if (index === 'A') return worktree === 'D' ? null : 'added'
+  if (index === 'D' || worktree === 'D') return 'deleted'
+  return 'modified'
+}
+
+async function countUntracked(root, rel) {
+  try {
+    const abs = path.join(root, rel)
+    const st = await fs.stat(abs)
+    if (!st.isFile()) return { additions: 0, deletions: 0, binary: false }
+    if (st.size > MAX_COUNTED_FILE_BYTES) return { additions: 0, deletions: 0, binary: false, large: true }
+    const buf = await fs.readFile(abs)
+    if (buf.subarray(0, 8000).includes(0)) return { additions: 0, deletions: 0, binary: true }
+    const text = buf.toString('utf8')
+    const additions = text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
+    return { additions, deletions: 0, binary: false }
+  } catch {
+    return { additions: 0, deletions: 0, binary: false }
+  }
+}
+
 export function createGit({ root, rootReal = root, limits }) {
   const run = (args, opts) => runGit(root, args, opts)
 
@@ -103,11 +151,14 @@ export function createGit({ root, rootReal = root, limits }) {
   }
 
   /** Untracked files are included in unstaged diffs (as additions) so the diff reflects the full working tree. */
-  async function diff({ path: rel = '', staged = false, includeUntracked = true } = {}) {
+  async function diff({ path: rel = '', staged = false, includeUntracked = true, againstHead = false, alsoPaths = [] } = {}) {
     await requireRepository()
-    const pathArgs = rel ? ['--', rel] : []
+    const pathArgs = rel ? ['--', rel, ...alsoPaths] : []
     const base = ['diff', '--no-color', '--no-ext-diff', '--no-textconv']
-    let text = (await run([...base, ...(staged ? ['--cached'] : []), ...pathArgs])).stdout
+    // `againstHead` compares the working tree (staged and unstaged together) with HEAD: the review view.
+    let against = []
+    if (againstHead && !staged) against = [(await info()).headSha ?? EMPTY_TREE]
+    let text = (await run([...base, ...(staged ? ['--cached'] : []), ...against, ...pathArgs])).stdout
 
     if (!staged && includeUntracked) {
       const { untracked } = parseStatusPorcelain(
@@ -126,5 +177,68 @@ export function createGit({ root, rootReal = root, limits }) {
     }
   }
 
-  return { isRepository, info, status, diff, run }
+  /**
+   * Authoritative changed-file list: `git status` for the kind of change, `git diff --numstat HEAD` for
+   * line counts (rename-aware), and a direct line count for untracked files.
+   */
+  async function changes() {
+    await requireRepository()
+    const st = await status()
+    const base = st.headSha ?? EMPTY_TREE
+    const [numRaw] = await Promise.all([run(['diff', '--numstat', '-z', '--no-color', '--no-ext-diff', '--no-textconv', base, '--']).then(r => r.stdout)])
+    const counts = new Map(parseNumstat(numRaw).map(c => [c.path, c]))
+    const files = []
+    for (const e of st.entries) {
+      const status_ = classify(e)
+      if (!status_) continue
+      const renamed = st.renamed.find(r => r.to === e.path)
+      let c = counts.get(e.path) ?? { additions: 0, deletions: 0, binary: false }
+      if (status_ === 'untracked' && files.filter(f => f.status === 'untracked').length < MAX_UNTRACKED_DIFFS) c = await countUntracked(rootReal, e.path)
+      files.push({
+        path: e.path, status: status_, ...(renamed ? { from: renamed.from } : {}),
+        additions: c.additions, deletions: c.deletions, binary: !!c.binary, ...(c.large ? { large: true } : {}),
+        staged: e.index !== ' ' && e.index !== '?', untracked: status_ === 'untracked',
+      })
+    }
+    files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+    return {
+      branch: st.branch, headSha: st.headSha, clean: files.length === 0, files,
+      additions: files.reduce((n, f) => n + f.additions, 0), deletions: files.reduce((n, f) => n + f.deletions, 0),
+    }
+  }
+
+  /**
+   * Discards uncommitted changes of one path (index and working tree) so it matches HEAD. A file that does not
+   * exist in HEAD (new or untracked) is removed. Never touches other paths, never resets or cleans broadly.
+   * @returns {Promise<{path:string, action:'restored'|'removed', previous:string}>}
+   */
+  async function restoreFile(rel) {
+    await requireRepository()
+    if (!rel || rel === '.git' || rel.startsWith('.git/')) throw new WorkspaceError('invalid_input', 'Cannot revert this path')
+    const res = await run(['status', '--porcelain=v1', '-z', '--untracked-files=all']) // whole status: rename pairs need both paths
+    const parsed = parseStatusPorcelain(res.stdout)
+    const entry = parsed.entries.find(e => e.path === rel)
+    if (!entry) throw new WorkspaceError('nothing_to_revert', `${rel} has no uncommitted changes`)
+    const kind = classify(entry)
+    if (kind === 'conflicted') throw new WorkspaceError('revert_conflict', `${rel} has merge conflicts; resolve them in git`)
+    if (kind === 'untracked') {
+      await fs.rm(path.join(rootReal, rel), { force: true })
+      return { path: rel, action: 'removed', previous: kind }
+    }
+    if (kind === 'renamed') {
+      const from = parsed.renamed.find(r => r.to === rel)?.from
+      await run(['rm', '-f', '-q', '--', rel])
+      if (from) await run(['restore', '--source=HEAD', '--staged', '--worktree', '--', from])
+      return { path: rel, action: 'restored', previous: kind }
+    }
+    if (entry.index === 'A') { // exists only in the index/working tree: not in HEAD
+      await run(['rm', '-f', '-q', '--', rel])
+      return { path: rel, action: 'removed', previous: kind }
+    }
+    await run(['restore', '--source=HEAD', '--staged', '--worktree', '--', rel])
+    return { path: rel, action: 'restored', previous: kind }
+  }
+
+  return { isRepository, info, status, diff, changes, restoreFile, run }
+
 }

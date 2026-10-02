@@ -1,6 +1,6 @@
 // Connectivity, recovery and multi-user behaviour with the real server behind a controllable front server.
 import { test, expect } from '@playwright/test'
-import { ctl, send, openRepo, composer, conversationLog, openSidebar, banner } from './helpers.mjs'
+import { ctl, send, openRepo, composer, conversationLog, openSidebar, closeSidebar, banner } from './helpers.mjs'
 
 let repo
 test.beforeEach(async ({ request }) => { ({ repo } = await ctl.reset(request)) })
@@ -71,8 +71,7 @@ test.describe('offline and reconnect', () => {
     await expect(banner(page)).toContainText('Offline — showing your saved conversations')
     await openSidebar(page)
     await expect(page.getByRole('navigation', { name: 'Conversation list' })).toContainText('Hello cached')
-    const close = page.getByRole('button', { name: 'Close sidebar' })
-    if (await close.isVisible().catch(() => false)) await close.click() // phone drawer
+    await closeSidebar(page) // phone drawer
     await expect(page.getByRole('button', { name: 'Send' })).toBeDisabled()
     await expect(composer(page)).toBeVisible()
     await ctl.post(request, 'backend/start')

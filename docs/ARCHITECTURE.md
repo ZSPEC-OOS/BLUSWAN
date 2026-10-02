@@ -129,4 +129,4 @@ state and de-duplicates events by id. `diagnoseConnection()` probes each stage s
 
 ## Client
 
-The UI is a projection of runtime events: `projectEvents` turns the canonical event stream into transcript entries, grouped activity, permission prompts and notices; a framework-free store feeds React through `useSyncExternalStore`. The workspace panel (changes, validation, commands) fetches git-backed state and per-file diffs on demand and caches them by workspace revision. Layout adapts: three columns on desktop, sheets on mobile.
+The UI is a projection of runtime events: `projectEvents` turns the canonical event stream into transcript entries, grouped activity, permission prompts and notices; a framework-free store feeds React through `useSyncExternalStore`. The workspace panel (changes, validation, commands) fetches git-backed state and per-file diffs on demand and caches them by workspace revision. Layout adapts: three columns on desktop, sheets on mobile; on phones the toolbar is replaced by a compact header with Workspace and Settings drawers composed from the same components and state ([MOBILE.md](MOBILE.md)).

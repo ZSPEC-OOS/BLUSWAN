@@ -65,6 +65,8 @@ Connect a GitHub App and the whole task lifecycle runs from the UI, desktop or p
 **Commit**, **Push**, **Create Pull Request**, merge on GitHub, then **Sync Main & Clean Up** and start the next task. GitHub credentials never reach the browser; nothing is merged
 or force-pushed for you. Without GitHub configuration BLUSWAN works exactly as before with local repositories. Setup, minimum permissions and Render notes: [`docs/GITHUB.md`](docs/GITHUB.md).
 
+On phones the interface is conversation-first: ☰ Workspace (repositories, Git, history), ⚙ Settings (model, edit mode, GitHub, runtime). See [`docs/MOBILE.md`](docs/MOBILE.md).
+
 ## Scripts
 
 | Script | |

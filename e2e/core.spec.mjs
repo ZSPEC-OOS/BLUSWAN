@@ -17,7 +17,8 @@ test('send, stream and finish a conversation; it is saved @mobile', async ({ pag
   await send(page, 'hello there')
   await expect(conversationLog(page)).toContainText('Hello from the scripted model.')
   await expect(page.getByText('Completed').first()).toBeVisible()
-  await expect(page.getByText('Saved', { exact: true }).first()).toBeVisible()
+  if (page.viewportSize().width > 900) await expect(page.getByText('Saved', { exact: true }).first()).toBeVisible() // phones show only save problems
+  else await expect(page.getByText(/isn.t synced|Changed elsewhere/)).toHaveCount(0)
 })
 
 test('open a repository, edit files, view changes, diff and validation', async ({ page, request }) => {

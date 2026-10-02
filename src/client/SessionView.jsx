@@ -12,7 +12,7 @@ const bubble = (role) => ({
   color: '#e2e8f0',
 })
 
-const MARK = { running: '▸', done: '✓', failed: '✗' }
+const MARK = { running: '▸', done: '✓', failed: '✗', skipped: '–' }
 
 export default function SessionView({ session }) {
   if (!session) return null

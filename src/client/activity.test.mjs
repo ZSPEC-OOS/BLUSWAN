@@ -49,4 +49,21 @@ describe('client activity timeline', () => {
     assert.equal(describeToolCall('git_status'), 'Checking git status')
     assert.equal(describeToolCall('mystery'), 'Running mystery')
   })
+
+  it('shows validation activity with simple states and unverified-claim warnings', () => {
+    const t = buildTimeline([
+      ev('validation.started', { validationId: 'v1', kind: 'test', command: 'npm test', scope: 'focused' }),
+      ev('validation.completed', { validationId: 'v1', kind: 'test', command: 'npm test', scope: 'focused', status: 'failed', summary: '1 test failed', durationMs: 5 }),
+      ev('validation.started', { validationId: 'v2', kind: 'build', command: 'npm run build', scope: 'broad' }),
+      ev('validation.completed', { validationId: 'v2', kind: 'build', command: 'npm run build', scope: 'broad', status: 'passed', summary: 'passed', durationMs: 5 }),
+      ev('validation.started', { validationId: 'v3', kind: 'lint', command: 'npm run lint', scope: 'broad' }),
+      ev('validation.completed', { validationId: 'v3', kind: 'lint', command: 'npm run lint', scope: 'broad', status: 'unavailable', summary: 'x', durationMs: 1 }),
+      ev('completion.warning', { claim: 'tests pass', kind: 'test', problem: 'no such check ran after the latest changes' }),
+    ])
+    assert.deepEqual(t.slice(0, 3).map(i => [i.status, i.label]), [
+      ['failed', 'tests failed: npm test'], ['done', 'build passed: npm run build'], ['skipped', 'lint unavailable: npm run lint'],
+    ])
+    assert.equal(t[0].error, '1 test failed')
+    assert.deepEqual([t[3].kind, /Unverified claim: "tests pass"/.test(t[3].text)], ['notice', true])
+  })
 })

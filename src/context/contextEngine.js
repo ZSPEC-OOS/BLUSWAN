@@ -15,6 +15,7 @@ import { buildRepositoryItems } from './repositoryContext.js'
 import { validateHistory, splitExchanges, afterBoundary, renderConversation, exchangeMessages } from './conversationContext.js'
 import { foldExchanges, applySummarizer } from './compaction.js'
 import { assembleContext } from './contextBuilder.js'
+import { renderValidationState } from '../validation/validationState.js'
 
 const contextError = (code, message) => createError({ code, message })
 
@@ -63,6 +64,8 @@ export function createContextEngine({ estimator = defaultEstimator, config = {},
     const requests = users.slice(-3).reverse().map(m => m.content)
     const searchHits = history.filter(m => m.role === 'tool').slice(-6).flatMap(m => m.meta?.hits ?? [])
 
+    const validationText = renderValidationState(session.validation) // current evidence; high priority, kept at every level
+    const withValidation = (rendered, extra) => (extra ? { ...(rendered ?? {}), text: [rendered?.text, extra].filter(Boolean).join('\n\n') } : rendered)
     const plan = { stripNarration: false, compactTools: false, recentToolBudget: cfg.maxToolContextTokens, repoLevel: 'full', summaryLevel: undefined, workspaceLevel: 'full', dropMiddleCycles: false }
     let exchanges = splitExchanges(afterBoundary(history, summary.lastCompactedMessageId))
     const foldedMessages = []
@@ -84,7 +87,7 @@ export function createContextEngine({ estimator = defaultEstimator, config = {},
       const built = assembleContext({
         estimator, systemText: system,
         workspaceText: workspace ? await workspaceText(workspace, plan.workspaceLevel) : null,
-        summary: renderSummary(summary, { estimator, maxTokens: cfg.maxSummaryTokens, level: plan.summaryLevel }),
+        summary: withValidation(renderSummary(summary, { estimator, maxTokens: cfg.maxSummaryTokens, level: plan.summaryLevel }), validationText),
         repository: (await repo(plan.repoLevel)).items, conversation, priorityOf,
       })
       return { built, conversation }

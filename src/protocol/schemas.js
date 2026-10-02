@@ -5,6 +5,9 @@ import { redactSecrets } from '../utils/redact.js'
 
 export const MESSAGE_ROLES = Object.freeze(['system', 'user', 'assistant', 'tool'])
 
+/** Outcome of one run (one user request). Separate from the reusable session status. */
+export const RUN_OUTCOMES = Object.freeze(['success', 'warning', 'failed', 'cancelled'])
+
 export const SESSION_STATUSES = Object.freeze([
   'idle',
   'running',
@@ -102,6 +105,8 @@ export function createSession({ workspaceId = null, model, id, now = Date.now() 
     toolCalls: [],
     changedFiles: [],
     turns: [],
+    runs: [],
+    validation: null,
     status: 'idle',
     contextSummary: null,
     tokenUsage: { input: 0, output: 0, reasoning: 0, total: 0 },

@@ -39,6 +39,13 @@ export function assertSafeId(id, what = 'id') {
   return id
 }
 
+/** Collections for feature records owned by a user (GitHub connection, repositories, task workflow). */
+export const USER_COLLECTIONS = Object.freeze(['github_connection', 'github_repos', 'github_tasks'])
+export function assertCollection(c) {
+  if (!USER_COLLECTIONS.includes(c)) throw persistenceError('persistence_invalid_record', 'Unknown collection.')
+  return c
+}
+
 export const paths = Object.freeze({
   session: (u, id) => `users/${assertSafeId(u, 'user id')}/sessions/${assertSafeId(id, 'session id')}`,
   sessions: (u) => `users/${assertSafeId(u, 'user id')}/sessions`,
@@ -47,5 +54,7 @@ export const paths = Object.freeze({
   workspace: (u, id) => `users/${assertSafeId(u, 'user id')}/workspaces/${assertSafeId(id, 'workspace id')}`,
   workspaces: (u) => `users/${assertSafeId(u, 'user id')}/workspaces`,
   settings: (u) => `users/${assertSafeId(u, 'user id')}/settings/main`,
+  userDoc: (u, c, id) => `users/${assertSafeId(u, 'user id')}/${assertCollection(c)}/${assertSafeId(id, 'document id')}`,
+  userDocs: (u, c) => `users/${assertSafeId(u, 'user id')}/${assertCollection(c)}`,
   user: (u) => `users/${assertSafeId(u, 'user id')}`,
 })

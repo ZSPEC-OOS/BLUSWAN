@@ -11,7 +11,24 @@ import { createEnvCredentialStore } from '../providers/credentials/serverCredent
 import { createFilePersistence } from '../persistence/adapters/filePersistence.js'
 import { createMemoryPersistence } from '../persistence/adapters/memoryPersistence.js'
 import { loadRuntimeConfig } from '../config/runtimeConfig.js'
+import { createGithubApi } from './github/api.js'
+import { createAppAuth } from './github/appAuth.js'
 import { APP_VERSION, PROTOCOL_VERSION } from '../protocol/version.js'
+
+/** GitHub App wiring from the environment (inert when GitHub is not configured). */
+function buildGithub(settings, env) {
+  const gh = settings.github
+  if (!gh.configured) return { settings: gh }
+  const api = createGithubApi({ apiUrl: gh.apiUrl }); const webApi = createGithubApi({ apiUrl: gh.webUrl })
+  const host = new URL(gh.webUrl).host
+  return {
+    settings: gh, api, webApi,
+    appAuth: createAppAuth({ appId: env.GITHUB_APP_ID, privateKey: env.GITHUB_APP_PRIVATE_KEY, api }),
+    secrets: { clientId: env.GITHUB_APP_CLIENT_ID, clientSecret: env.GITHUB_APP_CLIENT_SECRET, webhookSecret: env.GITHUB_APP_WEBHOOK_SECRET, stateSecret: env.GITHUB_APP_CLIENT_SECRET },
+    // only https clone URLs on the configured GitHub host and shaped like /<owner>/<repo>.git are ever cloned
+    cloneUrlOk: (url, { owner, repo }) => { try { const u = new URL(url); return u.protocol === 'https:' && u.host === host && !u.username && u.pathname.toLowerCase() === `/${owner}/${repo}.git`.toLowerCase() } catch { return false } },
+  }
+}
 
 export class ConfigError extends Error {
   constructor(problems) { super(`Invalid BLUSWAN configuration:\n - ${problems.join('\n - ')}`); this.name = 'ConfigError'; this.problems = problems }
@@ -51,6 +68,7 @@ export async function startServer({ env = process.env, injected = {}, print = ()
     persistence, credentials: injected.credentials ?? createEnvCredentialStore(env), hostId: settings.hostId || os.hostname(),
     allowedRoots: settings.roots.length ? settings.roots : [os.homedir()], config: loadRuntimeConfig(env),
     ...(injected.providerFactory ? { providerFactory: injected.providerFactory } : {}),
+    githubOptions: injected.github ?? buildGithub(settings, env),
   })
   // one JSON object per line: easy to grep, ship and parse; bodies, headers, tokens and query strings never appear
   const requestLogger = { info: (msg, meta) => print(JSON.stringify({ ts: new Date().toISOString(), level: 'info', msg, ...meta })), warn() {}, error() {}, debug() {} }

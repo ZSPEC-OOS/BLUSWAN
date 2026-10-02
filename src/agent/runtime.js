@@ -58,6 +58,7 @@ export function createAgentRuntime({
   sessions = createSessionManager(),
   config = getRuntimeConfig(),
   workspaces = null, // workspace manager; sessions with a workspaceId get tools
+  workspaceNotes = null, // async (workspaceId) => text appended to the system prompt (e.g. the branch workflow the user manages)
   tools = createDefaultToolRegistry(),
   toolPolicy,
   approvals = 'unattended', // 'interactive': actions that need approval wait for approvePermission/denyPermission; 'unattended': they fail with permission_required
@@ -598,7 +599,8 @@ export function createAgentRuntime({
   async function runAgent(sessionId, controller, run) {
     const { signal } = controller
     const { provider, workspace } = validateRun(sessions.get(sessionId))
-    const system = buildSystemPrompt()
+    const notes = workspaceNotes ? await workspaceNotes(sessions.get(sessionId).workspaceId).catch(() => '') : ''
+    const system = notes ? `${buildSystemPrompt()}\n\n${notes}` : buildSystemPrompt()
     const toolDefs = workspace ? tools.describeTools() : []
     const summarizer = config.summarizeWithModel
       ? createProviderSummarizer({ provider, model: sessions.get(sessionId).model.model, signal }) : null

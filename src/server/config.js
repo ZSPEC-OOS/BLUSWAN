@@ -62,10 +62,26 @@ export function parseServerConfig(env = process.env) {
   }
   if (!loopback && authMode === 'firebase') warnings.push('Listening beyond loopback: terminate TLS in front of BLUSWAN (reverse proxy) — never expose bearer tokens over plain http.')
 
+  // GitHub integration (optional). Partial configuration is an error: it would half-work.
+  const gh = {
+    appId: env.GITHUB_APP_ID || '', clientId: env.GITHUB_APP_CLIENT_ID || '', slug: env.GITHUB_APP_SLUG || '',
+    hasPrivateKey: !!env.GITHUB_APP_PRIVATE_KEY, hasClientSecret: !!env.GITHUB_APP_CLIENT_SECRET, hasWebhookSecret: !!env.GITHUB_APP_WEBHOOK_SECRET,
+    apiUrl: (env.GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, ''), webUrl: (env.GITHUB_WEB_URL || 'https://github.com').replace(/\/+$/, ''),
+  }
+  const ghAny = !!(gh.appId || gh.clientId || gh.hasPrivateKey || gh.hasClientSecret)
+  const ghMissing = [['GITHUB_APP_ID', gh.appId], ['GITHUB_APP_PRIVATE_KEY', gh.hasPrivateKey], ['GITHUB_APP_CLIENT_ID', gh.clientId], ['GITHUB_APP_CLIENT_SECRET', gh.hasClientSecret], ['GITHUB_APP_SLUG', gh.slug]].filter(([, v]) => !v).map(([n]) => n)
+  if (ghAny && ghMissing.length) errors.push(`GitHub integration is partly configured; also set: ${ghMissing.join(', ')}.`)
+  if (ghAny && env.GITHUB_APP_PRIVATE_KEY && !/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(String(env.GITHUB_APP_PRIVATE_KEY).replace(/\\n/g, '\n'))) errors.push('GITHUB_APP_PRIVATE_KEY must be the PEM text of the GitHub App private key (\\n escapes are accepted).')
+  for (const [name, v] of [['GITHUB_API_URL', gh.apiUrl], ['GITHUB_WEB_URL', gh.webUrl]]) {
+    try { const u = new URL(v); if (u.protocol !== 'https:' && !(u.protocol === 'http:' && LOOPBACK.includes(u.hostname))) errors.push(`${name} must be an https URL.`) } catch { errors.push(`${name} must be a URL.`) }
+  }
+  if (ghAny && !gh.hasWebhookSecret) warnings.push('GITHUB_APP_WEBHOOK_SECRET is not set: pull request merges are detected by refresh/polling only.')
+  const githubConfigured = ghAny && !ghMissing.length
+
   const providers = Object.entries(PROVIDER_KEYS).filter(([, k]) => !!env[k]).map(([p]) => p)
 
   return {
     ok: errors.length === 0, errors, warnings,
-    settings: { port, host, authMode, persistence, dataDir: env.BLUSWAN_DATA_DIR || '.bluswan/data', roots, production, corsOrigin: env.BLUSWAN_CORS_ORIGIN || null, providers, hostId: env.BLUSWAN_HOST_ID || null, projectId: env.FIREBASE_PROJECT_ID || null, staticDir: env.BLUSWAN_STATIC_DIR || null },
+    settings: { port, host, authMode, persistence, dataDir: env.BLUSWAN_DATA_DIR || '.bluswan/data', roots, production, corsOrigin: env.BLUSWAN_CORS_ORIGIN || null, providers, hostId: env.BLUSWAN_HOST_ID || null, projectId: env.FIREBASE_PROJECT_ID || null, staticDir: env.BLUSWAN_STATIC_DIR || null, github: { configured: githubConfigured, webhook: githubConfigured && gh.hasWebhookSecret, apiUrl: gh.apiUrl, webUrl: gh.webUrl, slug: gh.slug } },
   }
 }

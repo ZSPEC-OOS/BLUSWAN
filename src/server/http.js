@@ -10,7 +10,7 @@ import { APP_VERSION, PROTOCOL_VERSION, SERVICE_NAME } from '../protocol/version
 
 const log = createLogger('http')
 const MAX_BODY = 1_000_000
-const STATUS = { unauthenticated: 401, forbidden: 403, not_found: 404, workspace_not_found: 404, persistence_not_found: 404, invalid_request: 400, session_busy: 409, persistence_conflict: 409, nothing_to_revert: 409, revert_unsupported: 422, revert_failed: 500, configuration_error: 503, persistence_invalid_record: 422, persistence_schema_unsupported: 422, persistence_unavailable: 503, server_not_ready: 503, server_unavailable: 503, workspace_host_unavailable: 503, payload_too_large: 413, too_many_requests: 429, protocol_mismatch: 426 }
+const STATUS = { unauthenticated: 401, forbidden: 403, not_found: 404, workspace_not_found: 404, persistence_not_found: 404, invalid_request: 400, session_busy: 409, persistence_conflict: 409, nothing_to_revert: 409, revert_unsupported: 422, revert_failed: 500, configuration_error: 503, persistence_invalid_record: 422, persistence_schema_unsupported: 422, persistence_unavailable: 503, server_not_ready: 503, server_unavailable: 503, workspace_host_unavailable: 503, payload_too_large: 413, too_many_requests: 429, protocol_mismatch: 426, github_not_configured: 503, github_not_connected: 409, github_rate_limited: 429, github_auth_expired: 401, github_permission_denied: 403, github_repository_not_found: 404, github_api_error: 502, git_operation_failed: 500, git_dirty_working_tree: 409, git_conflicts: 409, git_detached_head: 409, git_branch_diverged: 409, git_push_rejected: 409, git_remote_mismatch: 409, git_timeout: 504, git_auth_rejected: 403, operation_in_progress: 409, operation_cancelled: 409, clone_conflict: 409, protected_branch: 409, branch_exists: 409, pull_request_not_merged: 409 }
 
 const send = (res, status, body, headers = {}) => {
   const text = JSON.stringify(body)
@@ -34,6 +34,12 @@ async function readJson(req, maxBody = MAX_BODY) {
   if (tooLarge) throw createError({ code: 'payload_too_large', message: 'Request body is too large.' })
   if (!chunks.length) return {}
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { throw createError({ code: 'invalid_request', message: 'Request body must be JSON.' }) }
+}
+
+async function readRaw(req, max = 5_000_000) {
+  const chunks = []; let size = 0
+  for await (const c of req) { size += c.length; if (size > max) throw createError({ code: 'payload_too_large', message: 'Request body is too large.' }); chunks.push(c) }
+  return Buffer.concat(chunks)
 }
 
 /** Normalizes any failure into { error: { code, message } } — never a stack trace, never a secret. */
@@ -80,6 +86,40 @@ export function createHttpHandler({ service, auth, corsOrigin = null, heartbeatM
       if (!seg[1] && m === 'GET') return ok({ workspaces: await service.listWorkspaces(user) })
       if (!seg[1] && m === 'POST') return ok(await service.openWorkspace(user, body), 201)
       if (seg[2] === 'reconnect' && m === 'POST') return ok(await service.reconnectWorkspace(user, seg[1], body))
+    }
+    if (seg[0] === 'github') {
+      const gh = service.github
+      if (seg[1] === 'status' && m === 'GET') return ok(await gh.status(user))
+      if (seg[1] === 'connect' && !seg[2] && m === 'POST') return ok(await gh.connectUrl(user))
+      if (seg[1] === 'connect' && seg[2] === 'complete' && m === 'POST') return ok(await gh.completeConnection(user, { code: body.code, installationId: body.installationId, state: body.state }))
+      if (seg[1] === 'disconnect' && m === 'POST') return ok(await gh.disconnect(user))
+      if (seg[1] === 'recent' && m === 'GET') return ok(await gh.recent(user))
+      if (seg[1] === 'tasks' && m === 'GET') return ok(await gh.allTasks(user))
+      if (seg[1] === 'repositories' && !seg[2] && m === 'GET') return ok(await gh.listRepositories(user, { page: Number(q.get('page')) || 1, perPage: Number(q.get('perPage')) || 30, q: q.get('q') ?? '', owner: q.get('owner') ?? '', visibility: q.get('visibility') ?? '', refresh: q.get('refresh') === '1' }))
+      if (seg[1] === 'repositories' && seg[2] && seg[3] && !seg[4] && m === 'GET') return ok(await gh.repository(user, seg[2], seg[3]))
+      if (seg[1] === 'repositories' && seg[4] === 'clone' && m === 'POST') return ok(await gh.clone(user, seg[2], seg[3]), 201)
+      if (seg[1] === 'repositories' && seg[4] === 'open' && m === 'POST') return ok(await gh.open(user, seg[2], seg[3]))
+    }
+    if (seg[0] === 'operations' && seg[2] === 'cancel' && m === 'POST') return ok(service.github.cancel(user, seg[1]))
+    if (seg[0] === 'workspaces' && seg[1] && seg[2]) {
+      const gh = service.github; const id = seg[1]
+      if (seg[2] === 'git' && m === 'GET') return ok(await gh.git(user, id))
+      if (seg[2] === 'branches' && m === 'GET') return ok(await gh.branches(user, id))
+      if (seg[2] === 'branches' && m === 'POST') return ok(await gh.createBranch(user, id, body), 201)
+      if (seg[2] === 'suggest-branch' && m === 'GET') return ok(gh.suggestBranch(q.get('task') ?? '', []))
+      if (seg[2] === 'checkout' && m === 'POST') return ok(await gh.checkout(user, id, body))
+      if (seg[2] === 'sync' && m === 'POST') return ok(await gh.sync(user, id))
+      if (seg[2] === 'commits' && m === 'GET') return ok(await gh.commits(user, id, { limit: Number(q.get('limit')) || 15 }))
+      if (seg[2] === 'suggest-commit' && m === 'GET') return ok(await gh.suggestCommit(user, id, { task: q.get('task') ?? '' }))
+      if (seg[2] === 'commit' && m === 'POST') return ok(await gh.commit(user, id, body), 201)
+      if (seg[2] === 'push' && m === 'POST') return ok(await gh.push(user, id))
+      if (seg[2] === 'pr-draft' && m === 'POST') return ok(await gh.prDraft(user, id, body))
+      if (seg[2] === 'pull-requests' && !seg[3] && m === 'POST') return ok(await gh.createPullRequest(user, id, body), 201)
+      if (seg[2] === 'pull-requests' && seg[3] === 'current' && m === 'GET') return ok(await gh.pullRequestStatus(user, id, { branch: q.get('branch') || undefined }))
+      if (seg[2] === 'cleanup' && m === 'POST') return ok(await gh.cleanup(user, id, body))
+      if (seg[2] === 'abandon' && m === 'POST') return ok(await gh.abandon(user, id, body))
+      if (seg[2] === 'remove-local' && m === 'POST') return ok(await gh.removeLocalCopy(user, id, body))
+      if (seg[2] === 'tasks' && m === 'GET') return ok(await gh.tasks(user, id))
     }
     if (seg[0] === 'sessions') {
       if (!seg[1]) {
@@ -174,6 +214,15 @@ export function createHttpHandler({ service, auth, corsOrigin = null, heartbeatM
         return send(res, r.ready ? 200 : 503, r.ready
           ? { ok: true, ready: true, service: SERVICE_NAME, version: APP_VERSION, protocolVersion: PROTOCOL_VERSION, auth: authName, checks: r.checks, providers: r.providers }
           : { ok: false, ready: false, service: SERVICE_NAME, version: APP_VERSION, protocolVersion: PROTOCOL_VERSION, auth: authName, checks: r.checks, providers: r.providers, error: { code: r.code, message: r.message, retryable: true } }, hdr)
+      }
+      if (url.pathname === '/api/github/webhook' && req.method === 'POST') { // authenticated by signature, not by bearer token
+        const raw = await readRaw(req)
+        const gh = service.github
+        if (!gh?.configured || !gh.webhookEnabled) throw createError({ code: 'not_found', message: 'Unknown endpoint.' })
+        if (!gh.verifyWebhook(raw, req.headers['x-hub-signature-256'])) throw createError({ code: 'unauthenticated', message: 'Invalid webhook signature.' })
+        let payload; try { payload = JSON.parse(raw.toString('utf8')) } catch { throw createError({ code: 'invalid_request', message: 'Webhook body must be JSON.' }) }
+        const result = await gh.handleWebhook(String(req.headers['x-github-event'] ?? ''), payload)
+        return send(res, 202, { accepted: true, ...result }, hdr)
       }
       if (draining) throw createError({ code: 'server_not_ready', message: 'BLUSWAN is shutting down.', retryable: true })
       const user = await auth.verify(bearerToken(req))

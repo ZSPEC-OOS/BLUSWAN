@@ -52,7 +52,9 @@ export async function startServer({ env = process.env, injected = {}, print = ()
     allowedRoots: settings.roots.length ? settings.roots : [os.homedir()], config: loadRuntimeConfig(env),
     ...(injected.providerFactory ? { providerFactory: injected.providerFactory } : {}),
   })
-  const handler = createHttpHandler({ service, auth, corsOrigin: settings.corsOrigin, staticDir: settings.staticDir, logRequests, ...(heartbeatMs ? { heartbeatMs } : {}) })
+  // one JSON object per line: easy to grep, ship and parse; bodies, headers, tokens and query strings never appear
+  const requestLogger = { info: (msg, meta) => print(JSON.stringify({ ts: new Date().toISOString(), level: 'info', msg, ...meta })), warn() {}, error() {}, debug() {} }
+  const handler = createHttpHandler({ service, auth, corsOrigin: settings.corsOrigin, staticDir: settings.staticDir, logRequests, logger: requestLogger, ...(heartbeatMs ? { heartbeatMs } : {}) })
   const server = http.createServer(handler)
   // JSON request lifetime is bounded; SSE is a long *response* and is governed by the handler's own lifetime/heartbeat.
   server.headersTimeout = 30_000; server.requestTimeout = 60_000; server.keepAliveTimeout = 65_000

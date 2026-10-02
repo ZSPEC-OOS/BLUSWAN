@@ -271,3 +271,17 @@ describe('file persistence fault tolerance', () => {
     assert.deepEqual((await store.get('a/b')).data, { v: 1 })
   })
 })
+
+describe('request log format', () => {
+  it('writes one JSON line per request through the supplied printer, without secrets', async () => {
+    const lines = []
+    const s = await startServer({ env: { BLUSWAN_PORT: '0', BLUSWAN_PERSISTENCE: 'memory' }, logRequests: true, print: (l) => lines.push(l) })
+    cleanups.push(() => s.close())
+    await fetch(`http://127.0.0.1:${s.port}/api/health?secret=1`, { headers: { Authorization: 'Bearer tok-secret' } })
+    await until(() => lines.some(l => l.startsWith('{')))
+    const entry = JSON.parse(lines.find(l => l.startsWith('{')))
+    assert.deepEqual(Object.keys(entry).sort(), ['level', 'method', 'ms', 'msg', 'path', 'requestId', 'status', 'ts'].sort())
+    assert.equal(entry.path, '/api/health'); assert.equal(entry.status, 200)
+    assert.doesNotMatch(lines.join('\n'), /tok-secret|secret=1/)
+  })
+})

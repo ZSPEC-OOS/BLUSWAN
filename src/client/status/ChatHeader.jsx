@@ -3,8 +3,8 @@ import SessionStatus from './SessionStatus.jsx'
 import './status.css'
 
 /** Repository identity, state, changed-file count, model and permission mode, always visible above the conversation. */
-export default function ChatHeader({ active, workspace, model, permissionMode, onPermissionMode, onOpenSettings, onToggleSidebar }) {
-  const changed = active?.changedFiles?.length ?? 0
+export default function ChatHeader({ active, workspace, model, permissionMode, onPermissionMode, onOpenSettings, onToggleSidebar, onToggleChanges, panelOpen = false }) {
+  const changed = active?.changedCount ?? 0
   const status = active?.view.status ?? 'ready'
   return (
     <header className="topbar">
@@ -19,8 +19,12 @@ export default function ChatHeader({ active, workspace, model, permissionMode, o
         ) : <span className="topbar__muted">No repository connected</span>}
       </div>
       <SessionStatus status={status} workingLabel={active?.view.workingLabel} />
-      {changed ? <span className="topbar__changed">{changed} {changed === 1 ? 'file' : 'files'} changed</span> : null}
       <span className="topbar__spacer" />
+      {onToggleChanges ? (
+        <button type="button" className="btn topbar__changes" onClick={onToggleChanges} aria-pressed={panelOpen} aria-label={changed ? `${changed} ${changed === 1 ? 'file' : 'files'} changed — toggle workspace panel` : 'Toggle workspace panel'} title="Changes, validation and commands (Ctrl+Shift+D)">
+          {changed ? `${changed} ${changed === 1 ? 'file' : 'files'} changed` : 'Workspace'}
+        </button>
+      ) : null}
       <button type="button" className="btn btn--ghost topbar__model" onClick={onOpenSettings} title="Model settings">{model?.model || 'Choose model'}</button>
       <label className="topbar__mode">
         <span className="sr-only">Permission mode</span>

@@ -23,6 +23,8 @@ export const TOOL_ERROR_CODES = Object.freeze([
   'git_not_repository',
   'git_error',
   'output_limit_exceeded',
+  'nothing_to_revert',
+  'revert_conflict',
   'internal_error',
 ])
 

@@ -19,12 +19,13 @@ import {
 import { buildSystemPrompt } from './systemPrompt.js'
 import { createContextEngine } from '../context/contextEngine.js'
 import { createProviderSummarizer } from '../context/compaction.js'
-import { createSessionSummary, observeUserMessage, observeToolResult } from '../context/sessionSummary.js'
+import { createSessionSummary, observeUserMessage, observeToolResult, observeRevert } from '../context/sessionSummary.js'
 import { describeObservation } from '../context/toolContext.js'
 import { observeFileRead, invalidateFiles } from '../context/repositoryContext.js'
 import { runProviderTurn } from './providerTurn.js'
 import { executeToolCalls } from './toolScheduler.js'
 import { serializeToolResult, summarizeToolResult } from './toolResults.js'
+import { redactSecrets } from '../utils/redact.js'
 import { createLogger } from '../utils/logger.js'
 import { createDefaultToolRegistry } from '../tools/registry.js'
 import { createToolExecutor } from '../tools/executor.js'
@@ -98,6 +99,7 @@ export function createAgentRuntime({
         else if (result.tool === 'read_many_files') for (const f of result.output.files) if (f.ok) await observeFileRead(workspace, f)
       } catch { /* cache misses never affect the run */ }
     }
+    if (obs.changed.length || call.name === 'shell') bumpRevision(workspace.id)
     if (obs.changed.length) {
       invalidateFiles(workspace, obs.changed.map(c => c.path))
       setValidation(sessionId, markMutated(validationOf(sessionId), obs.changed)) // earlier evidence no longer describes the code
@@ -143,6 +145,136 @@ export function createAgentRuntime({
   function trackChangedFile(sessionId, { path, action }) {
     const files = sessions.get(sessionId).changedFiles.filter(f => f.path !== path)
     sessions.update(sessionId, { changedFiles: [...files, { path, action }] })
+  }
+
+
+  // ─── Workspace review state (changes, diffs, command output, revert) ───────
+
+  const workspaceRevisions = new Map() // workspaceId → counter, bumped by anything that may change files
+  const commandLogs = new Map() // sessionId → [{ id, source, command, … stdout, stderr }]
+  const MAX_COMMANDS = 200
+  const MAX_STREAM_CHARS = 64_000
+
+  const bumpRevision = (workspaceId) => { if (workspaceId) workspaceRevisions.set(workspaceId, (workspaceRevisions.get(workspaceId) ?? 0) + 1); return workspaceRevisions.get(workspaceId) ?? 0 }
+  const revisionOf = (workspaceId) => workspaceRevisions.get(workspaceId) ?? 0
+
+  /** Bounded, redacted copy of command output; the UI shows exactly this (and says when it is cut). */
+  function boundStream(text) {
+    const t = redactSecrets(String(text ?? ''))
+    return t.length > MAX_STREAM_CHARS ? { text: `${t.slice(0, MAX_STREAM_CHARS)}`, cut: true } : { text: t, cut: false }
+  }
+
+  function addCommand(sessionId, record) {
+    const list = commandLogs.get(sessionId) ?? []
+    const i = list.findIndex(c => c.id === record.id)
+    if (i >= 0) list[i] = record
+    else list.push(record)
+    if (list.length > MAX_COMMANDS) list.splice(0, list.length - MAX_COMMANDS)
+    commandLogs.set(sessionId, list)
+  }
+
+  function recordShellCommand(sessionId, call, result, startedAt) {
+    const out = result.output ?? {}
+    const so = boundStream(out.stdout)
+    const se = boundStream(out.stderr)
+    const cancelled = result.error?.code === 'command_cancelled' || !!out.cancelled
+    const timedOut = result.error?.code === 'command_timeout' || !!out.timedOut
+    addCommand(sessionId, {
+      id: call.id, source: 'shell', command: redactSecrets(call.input?.command ?? out.command ?? ''), cwd: out.cwd ?? '',
+      exitCode: out.exitCode ?? null, signal: out.signal ?? null, timedOut, cancelled,
+      status: cancelled ? 'cancelled' : timedOut ? 'timeout' : !result.ok ? 'error' : out.exitCode === 0 ? 'passed' : 'failed',
+      durationMs: out.durationMs ?? Math.max(0, now() - startedAt), startedAt, completedAt: now(),
+      stdout: so.text, stderr: se.text, truncated: !!out.truncated || so.cut || se.cut,
+      error: !result.ok && !cancelled && !timedOut ? result.error?.message ?? null : null,
+    })
+  }
+
+  function recordValidationCommands(sessionId, results) {
+    for (const r of results) {
+      const text = boundStream(r.outputExcerpt)
+      addCommand(sessionId, {
+        id: r.id, source: 'validation', kind: r.kind, command: redactSecrets(r.command), cwd: '', exitCode: r.exitCode ?? null, signal: null,
+        timedOut: /timed out/.test(r.summary ?? ''), cancelled: r.status === 'cancelled', status: r.status, durationMs: r.durationMs ?? 0,
+        startedAt: r.startedAt ?? null, completedAt: r.completedAt ?? null, stdout: text.text, stderr: '', combined: true,
+        truncated: !!r.outputTruncated || text.cut, error: null,
+      })
+    }
+  }
+
+  const workspaceOf = (session) => (session?.workspaceId && workspaces ? workspaces.getWorkspace(session.workspaceId) : null)
+  const asSessionFile = (f) => ({
+    path: f.path, status: f.action === 'created' || f.action === 'added' ? 'added' : f.action === 'deleted' ? 'deleted' : 'modified',
+    additions: null, deletions: null, binary: false, staged: false, untracked: false,
+  })
+
+  /** One authoritative read of the review state: git when the workspace is a repository, else session history. */
+  async function getWorkspaceState(sessionId) {
+    const session = sessions.get(sessionId)
+    if (!session) throw createError({ code: 'not_found', message: 'Unknown session.' })
+    const workspace = workspaceOf(session)
+    const validation = session.validation ?? createValidationState()
+    const base = { sessionId, workspaceId: session.workspaceId, revision: revisionOf(session.workspaceId), updatedAt: now(), validation }
+    if (!workspace) return { ...base, source: 'none', repository: null, files: session.changedFiles.map(asSessionFile), summary: { files: session.changedFiles.length, additions: null, deletions: null } }
+    const repository = await workspace.refreshRepository().catch(() => workspace.metadata.repository)
+    const repo = { name: repository.name, branch: repository.branch ?? null, headSha: repository.headSha ?? null, isGitRepository: !!repository.isGitRepository }
+    if (repo.isGitRepository && workspace.gitChanges) {
+      try {
+        const ch = await workspace.gitChanges()
+        const before = new Set((workspace.metadata.baseline.initialStatus?.entries ?? []).map(e => e.path))
+        const files = ch.files.map(f => ({ ...f, preexisting: before.has(f.path) && !session.changedFiles.some(c => c.path === f.path) }))
+        return { ...base, source: 'git', repository: { ...repo, branch: ch.branch, headSha: ch.headSha }, files, summary: { files: files.length, additions: ch.additions, deletions: ch.deletions } }
+      } catch (e) {
+        return { ...base, source: 'session', repository: repo, error: { code: e?.code ?? 'git_error', message: 'Could not read the repository state.' }, files: session.changedFiles.map(asSessionFile), summary: { files: session.changedFiles.length, additions: null, deletions: null } }
+      }
+    }
+    return { ...base, source: 'session', repository: repo, files: session.changedFiles.map(asSessionFile), summary: { files: session.changedFiles.length, additions: null, deletions: null } }
+  }
+
+  /** Unified diff of one file against HEAD (git), or its current contents when no git diff exists. */
+  async function getFileDiff(sessionId, filePath, { from } = {}) {
+    const session = sessions.get(sessionId)
+    const workspace = workspaceOf(session)
+    if (!workspace) throw createError({ code: 'workspace_not_found', message: 'No repository is connected to this session.' })
+    const revision = revisionOf(session.workspaceId)
+    if (workspace.metadata.repository?.isGitRepository) {
+      const d = await workspace.gitDiff({ path: filePath, againstHead: true, alsoPaths: from ? [from] : [] })
+      return { source: 'git', path: filePath, revision, diff: d.diff, truncated: d.truncated, additions: d.additions, deletions: d.deletions, binary: d.files.some(f => f.binary) }
+    }
+    const tracked = session.changedFiles.find(f => f.path === filePath)
+    if (tracked?.action === 'deleted') return { source: 'session', path: filePath, revision, contents: null, deleted: true }
+    const r = await workspace.readFile(filePath, { maxBytes: 200_000 })
+    return { source: 'session', path: filePath, revision, contents: r.content, truncated: !!r.truncated }
+  }
+
+  /**
+   * User-driven revert of one file (confirmed in the UI). Not exposed to the model. Discards the file's
+   * uncommitted changes, then brings session, validation and context state back in line with the workspace.
+   */
+  async function revertFile(sessionId, filePath) {
+    const session = sessions.get(sessionId)
+    if (!session) throw createError({ code: 'not_found', message: 'Unknown session.' })
+    if (session.status === 'running' || session.status === 'waiting_permission') {
+      throw createError({ code: 'session_busy', message: 'Stop BLUSWAN before reverting a file.' })
+    }
+    const workspace = workspaceOf(session)
+    if (!workspace?.revertFile || !workspace.metadata.repository?.isGitRepository) {
+      throw createError({ code: 'revert_unsupported', message: 'Reverting files needs a Git repository.' })
+    }
+    let result
+    try {
+      result = await workspace.revertFile(filePath)
+    } catch (e) {
+      throw createError({ code: e?.code === 'nothing_to_revert' ? 'nothing_to_revert' : 'revert_failed', message: e?.code === 'nothing_to_revert' ? 'That file has no uncommitted changes.' : `Could not revert ${filePath}.`, cause: e?.message })
+    }
+    const revision = bumpRevision(session.workspaceId)
+    sessions.update(sessionId, { changedFiles: sessions.get(sessionId).changedFiles.filter(f => f.path !== filePath) })
+    setValidation(sessionId, markMutated(validationOf(sessionId), [{ path: filePath, action: 'reverted' }])) // earlier evidence no longer describes this code
+    updateSummary(sessionId, (summary) => observeRevert(summary, { path: filePath, now: now() }))
+    invalidateFiles(workspace, [filePath])
+    validationEngine.invalidate(workspace, [filePath])
+    contextEngine.invalidateWorkspace(workspace.id)
+    emit(sessionId, 'file.reverted', { path: filePath, action: 'reverted', result: result.action, revision })
+    return { ok: true, path: filePath, result: result.action, revision }
   }
 
   // ─── Permissions ────────────────────────────────────────────────────────────
@@ -222,6 +354,7 @@ export function createAgentRuntime({
       })
     }
     if (workspace) await observeResult(sessionId, workspace, call, result)
+    if (call.name === 'shell' && (result.ok || result.output)) recordShellCommand(sessionId, call, result, record.startedAt)
     const cancelled = result.error?.code === 'command_cancelled'
     recordToolCall(sessionId, {
       ...record, status: cancelled ? 'cancelled' : result.ok ? 'completed' : 'failed',
@@ -321,6 +454,7 @@ export function createAgentRuntime({
         state = ran.state
         setValidation(sessionId, state)
         recordValidationSummary(sessionId, ran.results)
+        recordValidationCommands(sessionId, ran.results)
         const failed = ran.results.some(r => r.status === 'failed' || r.status === 'error')
         const allPassed = ran.results.length > 0 && ran.results.every(r => r.status === 'passed')
         c.commandsRun += ran.results.length
@@ -669,6 +803,7 @@ export function createAgentRuntime({
       }
       agents.delete(sessionId)
       toolControllers.delete(sessionId)
+      commandLogs.delete(sessionId)
       await sessions.delete(sessionId)
       return true
     },
@@ -685,6 +820,12 @@ export function createAgentRuntime({
       }
     },
     listProviders: () => providers.listProviders(),
+    getWorkspaceState,
+    getFileDiff,
+    revertFile,
+    getWorkspaceRevision: (workspaceId) => revisionOf(workspaceId),
+    listCommands: (sessionId) => (commandLogs.get(sessionId) ?? []).map(({ stdout: _o, stderr: _e, ...meta }) => meta),
+    getCommand: (sessionId, id) => (commandLogs.get(sessionId) ?? []).find(c => c.id === id) ?? null,
     canOpenWorkspaces: () => !!workspaces,
     listWorkspaces: () => (workspaces ? workspaces.listWorkspaces() : []),
     async openWorkspace(spec) {

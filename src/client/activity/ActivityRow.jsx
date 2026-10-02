@@ -10,7 +10,7 @@ function Detail({ line }) {
 }
 
 /** One activity line: status mark (shape + text, not color alone), label, and optional expandable details. */
-function ActivityRow({ status, label, details = [], subdued = false, defaultOpen = false, kind }) {
+function ActivityRow({ status, label, details = [], subdued = false, defaultOpen = false, kind, links = [] }) {
   const [open, setOpen] = useState(defaultOpen)
   const hasDetails = details.length > 0
   const body = (
@@ -23,6 +23,11 @@ function ActivityRow({ status, label, details = [], subdued = false, defaultOpen
   )
   return (
     <div className={`act act--${status}${subdued ? ' act--subdued' : ''}${kind ? ` act--${kind}` : ''}`}>
+      {links.length ? (
+        <div className="act__links">
+          {links.map(l => <button key={l.key} type="button" className="act__link" onClick={l.onClick} aria-label={l.aria}>{l.text}</button>)}
+        </div>
+      ) : null}
       {hasDetails
         ? <button type="button" className="act__head" aria-expanded={open} onClick={() => setOpen(o => !o)}>{body}</button>
         : <div className="act__head act__head--static">{body}</div>}

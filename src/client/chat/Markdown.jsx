@@ -5,8 +5,9 @@ import './chat.css'
 
 function Path({ text, onOpenPath }) {
   const path = text.replace(/:\d+(?::\d+)?$/, '')
-  return onOpenPath
-    ? <button type="button" className="path" onClick={() => onOpenPath(path)} title={`Open ${path}`}>{text}</button>
+  const actionable = !!onOpenPath && (onOpenPath.accepts ? onOpenPath.accepts(path) : true)
+  return actionable
+    ? <button type="button" className="path" onClick={() => onOpenPath(path)} title={`Review ${path}`}>{text}</button>
     : <code className="path">{text}</code>
 }
 

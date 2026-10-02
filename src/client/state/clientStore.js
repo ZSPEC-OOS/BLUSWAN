@@ -5,13 +5,14 @@
 import { createProjector, statusFromRuntime } from '../activity/projectEvents.js'
 import { friendlyError } from '../activity/friendlyError.js'
 import { deriveTitle } from '../sessions/sessionTitle.js'
+import { createWorkspaceStore } from '../workspace/workspaceStore.js'
 
 const BUSY = new Set(['working', 'waiting'])
 
 /**
  * @param {{runtime:object, settings?:object|null, selectModel?:()=>({provider:string,model:string}|undefined)}} options
  */
-export function createClientStore({ runtime, settings = null, selectModel = () => undefined }) {
+export function createClientStore({ runtime, settings = null, selectModel = () => undefined, workspaceStorage, debounceMs }) {
   const projectors = new Map()
   const listeners = new Set()
   let snapshot = null
@@ -35,11 +36,13 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
     queueMicrotask(() => { scheduled = false; for (const fn of [...listeners]) fn() }) // coalesce bursts (streaming deltas)
   }
 
+  const ws = createWorkspaceStore({ runtime, notify: invalidate, ...(workspaceStorage !== undefined ? { storage: workspaceStorage } : {}), ...(debounceMs !== undefined ? { debounceMs } : {}) })
   for (const s of runtime.listSessions()) attach(s)
   const unsubscribe = runtime.subscribe((event, session) => {
     const existing = projectors.get(session.id)
     if (existing) existing.push(event)
     else attach(session) // snapshot already includes this event
+    ws.handleEvent(event)
     invalidate()
   })
 
@@ -73,6 +76,7 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
       const view = ensure(session).getView()
       const busy = BUSY.has(view.status)
       const workspace = workspaceInfo(session.workspaceId)
+      const review = ws.view(session.id, view.entries)
       active = {
         id: session.id,
         title: deriveTitle(projectors.get(session.id).firstUserText()),
@@ -83,6 +87,8 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
         tokenUsage: session.tokenUsage,
         composer: { disabled: busy || (workspace && !workspace.available), canStop: busy, busy, reason: busy ? (view.status === 'waiting' ? 'Waiting for your approval…' : 'BLUSWAN is working…') : workspace && !workspace.available ? 'This workspace is no longer available. Reconnect the repository to continue.' : null },
         workspaceMissing: !!workspace && !workspace.available,
+        review,
+        changedCount: review.loaded ? review.diffSummary.files : session.changedFiles.length,
       }
     }
     const model = selectModel() ?? session?.model ?? { provider: 'deepseek', model: '' }
@@ -104,7 +110,26 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
   const store = {
     getSnapshot: () => (snapshot ??= compute()),
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn) },
-    destroy() { unsubscribe(); listeners.clear() },
+    destroy() { unsubscribe(); ws.destroy(); listeners.clear() },
+
+    /** Review workspace actions, bound to the active conversation. */
+    workspace: {
+      selectFile: (path, o) => activeId && ws.selectFile(activeId, path, o),
+      stepFile: (d) => activeId && ws.stepFile(activeId, d),
+      clearSelection: () => activeId && ws.clearSelection(activeId),
+      selectTab: (t) => activeId && ws.selectTab(activeId, t),
+      openCommand: (id) => activeId && ws.openCommand(activeId, id),
+      openValidation: (id) => activeId && ws.openValidation(activeId, id),
+      openChanges: () => activeId && ws.openChanges(activeId),
+      closeDetail: () => activeId && ws.closeDetail(activeId),
+      closeSheet: () => activeId && ws.closeSheet(activeId),
+      refresh: () => activeId && ws.refresh(activeId),
+      getCommand: (id) => (activeId ? ws.getCommand(activeId, id) : null),
+      requestRevert: (path) => activeId && ws.requestRevert(activeId, path),
+      cancelRevert: () => activeId && ws.cancelRevert(activeId),
+      confirmRevert: () => (activeId ? ws.confirmRevert(activeId) : Promise.resolve({ ok: false })),
+      setPanelOpen: ws.setPanelOpen, togglePanel: ws.togglePanel, setWidth: ws.setWidth, idle: ws.idle,
+    },
 
     newSession({ workspaceId = currentWorkspaceId } = {}) {
       const session = runtime.startSession({ workspaceId: workspaceId ?? null, model: selectModel() })
@@ -112,6 +137,7 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
       activeId = session.id
       currentWorkspaceId = session.workspaceId
       notice = null
+      ws.refresh(session.id, { immediate: true })
       invalidate()
       return session.id
     },
@@ -123,6 +149,7 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
       activeId = id
       currentWorkspaceId = session.workspaceId
       notice = null
+      ws.refresh(id, { immediate: true })
       invalidate()
       return true
     },
@@ -165,6 +192,7 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
       }
       await runtime.deleteSession(id)
       projectors.delete(id)
+      ws.forget(id)
       if (activeId === id) activeId = store.getSnapshot().sessions[0]?.id ?? null
       invalidate()
       return { ok: true }
@@ -193,6 +221,6 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
   }
 
   const first = runtime.listSessions().sort((a, b) => b.updatedAt - a.updatedAt)[0]
-  if (first) { activeId = first.id; currentWorkspaceId = first.workspaceId }
+  if (first) { activeId = first.id; currentWorkspaceId = first.workspaceId; ws.refresh(first.id, { immediate: true }) }
   return store
 }

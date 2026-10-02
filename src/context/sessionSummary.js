@@ -24,6 +24,14 @@ export function createSessionSummary(now = Date.now()) {
 
 const touch = (s, now, patch) => ({ ...s, ...patch, lastUpdatedAt: now })
 
+/** A file the user discarded changes for is no longer "changed"; earlier reads of it may be out of date. */
+export function observeRevert(summary, { path, now = Date.now() }) {
+  return touch(summary, now, {
+    filesChanged: summary.filesChanged.filter(f => f.path !== path),
+    filesInspected: summary.filesInspected.map(f => (f.path === path ? { ...f, modifiedSince: true, ranges: [] } : f)),
+  })
+}
+
 /** Sentences of a user message that read as standing constraints or decisions. */
 export function extractConstraints(text) {
   return text.split(/(?<=[.!?])\s+|\n+/).map(t => t.trim())

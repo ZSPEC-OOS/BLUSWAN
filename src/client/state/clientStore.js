@@ -53,6 +53,11 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
     invalidate()
   })
 
+  const unsubscribeConnection = runtime.onConnection?.(() => invalidate()) // connection changes re-render banners and composers
+  /** False while only cached data is available or the runtime is unreachable: actions that need the runtime are disabled. */
+  const canAct = () => runtime.getConnection?.().canAct !== false
+  const OFFLINE_REASON = 'You are offline. Reconnect to continue; your saved conversations are still readable.'
+
   function workspaceInfo(workspaceId) {
     if (!workspaceId) return null
     const ws = runtime.listWorkspaces().find(w => w.id === workspaceId)
@@ -98,7 +103,7 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
         workspace,
         changedFiles: session.changedFiles,
         tokenUsage: session.tokenUsage,
-        composer: { disabled: busy || !!session.loading || (workspace && !workspace.available), canStop: busy, busy, reason: session.loading ? 'Restoring this conversation…' : busy ? (view.status === 'waiting' ? 'Waiting for your approval…' : 'BLUSWAN is working…') : workspace && !workspace.available ? 'This workspace is no longer available. Reconnect the repository to continue.' : null },
+        composer: { disabled: busy || !!session.loading || !canAct() || (workspace && !workspace.available), canStop: busy && canAct(), busy, offline: !canAct(), reason: !canAct() ? OFFLINE_REASON : session.loading ? 'Restoring this conversation…' : busy ? (view.status === 'waiting' ? 'Waiting for your approval…' : 'BLUSWAN is working…') : workspace && !workspace.available ? 'This workspace is no longer available. Reconnect the repository to continue.' : null },
         workspaceMissing: !!workspace && !workspace.available,
         review,
         changedCount: review.loaded ? review.diffSummary.files : (session.changedCount ?? session.changedFiles.length),
@@ -108,7 +113,8 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
     const readiness = runtime.checkModel ? runtime.checkModel(model) : { ok: true }
     return {
       sessions, activeId, active, notice,
-      connection: runtime.getConnection?.() ?? { state: 'online', offlineIndex: false, reconnects: 0 },
+      connection: runtime.getConnection?.() ?? { state: 'online', offlineIndex: false, reconnects: 0, canAct: true, usable: true },
+      canAct: canAct(),
       providerStatus: runtime.getProviderStatus?.() ?? [],
       workspace: workspaceInfo(session?.workspaceId ?? currentWorkspaceId),
       workspaces: runtime.listWorkspaces(),
@@ -126,7 +132,7 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
   const store = {
     getSnapshot: () => (snapshot ??= compute()),
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn) },
-    destroy() { unsubscribe(); ws.destroy(); listeners.clear() },
+    destroy() { unsubscribe(); unsubscribeConnection?.(); ws.destroy(); listeners.clear() },
 
     /** Review workspace actions, bound to the active conversation. */
     workspace: {
@@ -141,9 +147,9 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
       closeSheet: () => activeId && ws.closeSheet(activeId),
       refresh: () => activeId && ws.refresh(activeId),
       getCommand: (id) => (activeId ? ws.getCommand(activeId, id) : null),
-      requestRevert: (path) => activeId && ws.requestRevert(activeId, path),
+      requestRevert: (path) => activeId && canAct() && ws.requestRevert(activeId, path),
       cancelRevert: () => activeId && ws.cancelRevert(activeId),
-      confirmRevert: () => (activeId ? ws.confirmRevert(activeId) : Promise.resolve({ ok: false })),
+      confirmRevert: () => (activeId && canAct() ? ws.confirmRevert(activeId) : Promise.resolve({ ok: false })),
       setPanelOpen: ws.setPanelOpen, togglePanel: ws.togglePanel, setWidth: ws.setWidth, idle: ws.idle,
     },
 
@@ -176,6 +182,7 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
       const value = String(text ?? '')
       if (!activeId) return { ok: false, reason: 'no_session' }
       if (!value.trim()) return { ok: false, reason: 'empty' }
+      if (!canAct()) { setNotice({ kind: 'error', text: OFFLINE_REASON }); return { ok: false, reason: 'offline' } }
       const view = ensure(runtime.getSession(activeId)).getView()
       if (BUSY.has(view.status)) return { ok: false, reason: 'busy' }
       notice = null
@@ -190,13 +197,13 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
 
     /** Stop: real runtime cancellation (provider stream, running tools, pending approvals). */
     cancel() {
-      if (!activeId) return false
+      if (!activeId || !canAct()) return false
       runtime.cancelSession(activeId)
       return true
     },
 
-    approvePermission: (permissionId) => !!activeId && runtime.approvePermission(activeId, permissionId),
-    denyPermission: (permissionId) => !!activeId && runtime.denyPermission(activeId, permissionId),
+    approvePermission: (permissionId) => !!activeId && canAct() && runtime.approvePermission(activeId, permissionId),
+    denyPermission: (permissionId) => !!activeId && canAct() && runtime.denyPermission(activeId, permissionId),
 
     /** Deleting a running session needs `force`, which stops it first. Repository files are never touched. */
     async deleteSession(id, { force = false } = {}) {
@@ -216,6 +223,7 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
     },
 
     setPermissionMode(mode) {
+      if (!canAct()) { setNotice({ kind: 'error', text: OFFLINE_REASON }); return }
       runtime.setPermissionMode(mode)
       settings?.update({ permissionMode: mode })
       invalidate()
@@ -223,6 +231,7 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
 
     /** Opening a different repository creates a session for it; existing sessions keep their own workspace. */
     async openWorkspace(spec) {
+      if (!canAct()) { setNotice({ kind: 'error', text: OFFLINE_REASON }); return { ok: false } }
       try {
         const ws = await runtime.openWorkspace(spec)
         currentWorkspaceId = ws.id
@@ -235,6 +244,7 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
 
     /** Re-attach a repository that is not available on this host (moved, or opened from another machine). */
     async reconnectWorkspace(root) {
+      if (!canAct()) { setNotice({ kind: 'error', text: OFFLINE_REASON }); return { ok: false } }
       const id = activeId ? runtime.getSession(activeId)?.workspaceId : null
       if (!id || !runtime.reconnectWorkspace) return { ok: false }
       try { await runtime.reconnectWorkspace(id, root); invalidate(); ws.refresh(activeId, { immediate: true }); return { ok: true } } catch (e) {
@@ -246,6 +256,7 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
     retryLoad: () => { if (activeId) runtime.loadSession?.(activeId, { force: true }) },
     /** Picks the model for new conversations and, between runs, for the open one (applies to its next run). */
     async chooseModel({ provider, model }) {
+      if (!canAct()) { setNotice({ kind: 'error', text: OFFLINE_REASON }); return }
       settings?.update({ provider, model })
       runtime.saveSettings?.({ provider, model }).catch(() => {})
       const id = activeId
@@ -254,6 +265,8 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
       }
       invalidate()
     },
+    retryConnection: () => runtime.retryConnection?.(),
+    diagnoseConnection: () => (runtime.diagnoseConnection ? runtime.diagnoseConnection() : Promise.reject(new Error('unavailable'))),
     dismissNotice: () => setNotice(null),
     refresh: invalidate,
   }

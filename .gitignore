@@ -7,3 +7,6 @@ dist/
 __pycache__/
 *.pyc
 *.pyo
+test-results/
+playwright-report/
+.e2e/

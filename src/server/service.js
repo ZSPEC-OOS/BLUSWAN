@@ -5,6 +5,7 @@
 // credentials come from the server's credential store and are used only inside provider adapters.
 // Persistence is an injected adapter (file / memory / Firestore): sessions autosave, and are hydrated on demand.
 import os from 'node:os'
+import fs from 'node:fs/promises'
 import { createAgentRuntime } from '../agent/runtime.js'
 import { createSessionManager } from '../sessions/sessionManager.js'
 import { createSessionAutosave } from '../sessions/sessionStore.js'
@@ -40,7 +41,10 @@ const indexFromLive = (s, userId, persistenceStatus) => ({
  * @param {{persistence:object, credentials:object, hostId?:string, allowedRoots?:string[]|null, config?:object,
  *          providerFactory?:(user:object, credentials:object)=>object, autosave?:object}} deps
  */
-export function createBluswanService({ persistence, credentials, hostId = os.hostname(), allowedRoots = null, config = getRuntimeConfig(), providerFactory = null, autosave: autosaveOptions = {} }) {
+export function createBluswanService({ persistence, credentials, hostId = os.hostname(), allowedRoots = null, config = getRuntimeConfig(), providerFactory = null, autosave: autosaveOptions = {}, limits = {} }) {
+  const maxLiveSessions = limits.maxLiveSessions ?? 500 // per user: guards against runaway session creation
+  const maxConcurrentRuns = limits.maxConcurrentRuns ?? 8 // per user, across sessions
+  let draining = false
   const contexts = new Map() // userId → Promise<context>
   const metrics = { hydrations: 0, hydrationMsTotal: 0, hydrationMsMax: 0, invalidRecords: 0, schemaUnsupported: 0 } // counts and timings only, never content
 
@@ -165,6 +169,7 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
         throw createError({ code: 'invalid_request', message: 'That session id is not available.' })
       }
       if (workspaceId && !ctx.workspaces.getWorkspace(workspaceId)) throw createError({ code: 'workspace_not_found', message: 'That repository is not connected.' })
+      if (ctx.runtime.listSessions().length >= maxLiveSessions) throw createError({ code: 'too_many_requests', message: 'Too many open conversations. Delete some before starting another.' })
       const chosen = model?.model ? { provider: model.provider, model: model.model } : defaultModel(ctx, user)
       const s = ctx.runtime.startSession({ workspaceId, model: chosen, id })
       return { session: service.snapshot(s), persistence: 'unsaved' }
@@ -185,6 +190,9 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
       const s = await requireSession(ctx, id)
       if (typeof content !== 'string' || !content.trim()) throw createError({ code: 'invalid_request', message: 'Write a message first.' })
       if (!SENDABLE.has(s.status)) throw createError({ code: 'session_busy', message: `Session is ${s.status}; wait for it to finish or stop it.` })
+      if (ctx.runtime.listSessions().filter(x => x.status === 'running' || x.status === 'waiting_permission').length >= maxConcurrentRuns) {
+        throw createError({ code: 'too_many_requests', message: 'Too many conversations are running at once. Wait for one to finish.', retryable: true })
+      }
       ctx.runtime.sendMessage(id, content).catch(e => log.warn('run failed to start', { sessionId: id, code: isBluswanError(e) ? e.code : 'error' }))
       return { accepted: true }
     },
@@ -265,6 +273,50 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
       ctx.listeners.add(listener)
       return () => ctx.listeners.delete(listener)
     },
+
+    /**
+     * Readiness: can this runtime do useful work right now? Reports categories only — never paths, users or secrets.
+     * Missing provider keys do not make the runtime unready (the rest of the app works without a model).
+     */
+    async ready() {
+      const checks = { persistence: 'ok', workspaces: 'ok' }
+      if (draining) return { ready: false, code: 'server_not_ready', message: 'BLUSWAN is shutting down.', checks }
+      try { await (persistence.probe ? persistence.probe() : persistence.loadSettings('_ready')) } catch { checks.persistence = 'unavailable' }
+      if (allowedRoots?.length) {
+        const usable = await Promise.all(allowedRoots.map(r => fs.access(r).then(() => true, () => false)))
+        if (!usable.some(Boolean)) checks.workspaces = 'unavailable'
+      }
+      const configured = credentials.describe({ id: '_ready' }).filter(p => p.configured).length
+      if (checks.persistence !== 'ok') return { ready: false, code: 'persistence_unavailable', message: 'BLUSWAN storage is unavailable.', checks, providers: { configured } }
+      if (checks.workspaces !== 'ok') return { ready: false, code: 'workspace_host_unavailable', message: 'None of the configured workspace locations is accessible on this server.', checks, providers: { configured } }
+      return { ready: true, checks, providers: { configured } }
+    },
+
+    /** Live counts for logs and leak tests (no content, no identities). */
+    stats: async () => {
+      let sessionsLive = 0; let running = 0; let streams = 0
+      for (const p of contexts.values()) {
+        const c = await p.catch(() => null); if (!c) continue
+        for (const x of c.runtime.listSessions()) { sessionsLive += 1; if (x.status === 'running' || x.status === 'waiting_permission') running += 1 }
+        streams += c.listeners.size
+      }
+      return { users: contexts.size, sessionsLive, running, streams }
+    },
+
+    /** Graceful stop: refuse new work, cancel runs, flush saves, release workspaces and shells. Bounded by deadlineMs. */
+    async shutdown({ deadlineMs = 8000 } = {}) {
+      draining = true
+      const work = (async () => {
+        for (const p of [...contexts.values()]) {
+          const c = await p.catch(() => null); if (!c) continue
+          await service.dispose(c.user).catch(() => {})
+        }
+      })()
+      let timer
+      await Promise.race([work, new Promise(r => { timer = setTimeout(r, deadlineMs) })])
+      clearTimeout(timer)
+    },
+    isDraining: () => draining,
 
     /** Open event streams for a user (diagnostics and leak tests). */
     listenerCount: async (user) => (contexts.has(user.id) ? (await ctxOf(user)).listeners.size : 0),

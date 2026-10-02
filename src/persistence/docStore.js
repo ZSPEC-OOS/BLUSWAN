@@ -86,6 +86,8 @@ export function createPersistence(docs, { migrate = migrateSession } = {}) {
       return guard(async () => (await docs.get(paths.settings(userId)))?.data ?? null)
     },
 
+    /** Cheap health check for readiness: can the backing store be reached/written? Resolves true or throws persistence_unavailable. */
+    async probe() { return guard(async () => { await (docs.probe ? docs.probe() : docs.get('system/ready')); return true }) },
     async clearUser(userId) { return guard(() => docs.deleteTree(paths.user(userId))) },
   }
   return assertAdapter(adapter)

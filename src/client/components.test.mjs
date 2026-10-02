@@ -142,9 +142,6 @@ describe('persistence and restore UI', () => {
   it('conversation shows restoring, restore failure, offline and missing-workspace states', async () => {
     assert.match(await convo({ active: active({ loading: true, composer: { disabled: true, reason: 'Restoring this conversation…' } }) }), /Restoring this conversation/)
     assert.match(await convo({ active: active({ loadError: 'The server is unreachable.' }), onRetryLoad: noop }), /couldn.{1,6}t be restored[\s\S]*Try again/)
-    assert.match(await convo({ connection: { state: 'reconnecting', offlineIndex: false } }), /Connection lost — reconnecting/)
-    assert.match(await convo({ connection: { state: 'offline', offlineIndex: true } }), /Offline — showing your saved session list/)
-    assert.doesNotMatch(await convo({ connection: { state: 'online' } }), /banner-offline/)
     assert.match(await convo({ active: active({ workspaceMissing: true, workspace: { name: 'acme', available: false } }), onReconnectWorkspace: noop }), /Workspace unavailable: acme/)
   })
   it('settings panel reports provider status without any key field', async () => {

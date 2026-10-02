@@ -26,6 +26,10 @@
     "test:kimi": "node --env-file-if-exists=.env scripts/provider-smoke.mjs kimi",
     "test:openai": "node --env-file-if-exists=.env scripts/provider-smoke.mjs openai",
     "test:anthropic": "node --env-file-if-exists=.env scripts/provider-smoke.mjs anthropic",
+    "test:e2e": "vite build && playwright test -c e2e/playwright.config.mjs",
+    "test:release": "npm test && npm run lint && npm run build && npm run test:e2e",
+    "dogfood": "node --env-file-if-exists=.env scripts/dogfood.mjs",
+    "doctor": "node --env-file-if-exists=.env scripts/doctor.mjs",
     "eval": "node --env-file-if-exists=.env scripts/eval.mjs"
   },
   "dependencies": {
@@ -38,6 +42,7 @@
   },
   "devDependencies": {
     "@eslint/js": "9.0.0",
+    "@playwright/test": "1.56.1",
     "@vitejs/plugin-react": "5.1.1",
     "eslint": "9.39.4",
     "eslint-plugin-react": "7.37.5",

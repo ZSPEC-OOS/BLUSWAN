@@ -31,6 +31,9 @@ All normal tests are deterministic and offline (scripted models or mocked networ
 | `npm run test:client` | Client store, event projection, components (server-rendered), workspace review |
 | `npm run test:architecture` | Dependency directions, legacy-import guards, secret guards |
 | `npm run test:eval` | The evaluation harness itself |
+| `npm run test:e2e` | Browser suite (Playwright/Chromium): real runtime + built web app, scripted model, temporary repo and storage; desktop and phone viewports |
+| `npm run test:release` | `npm test` + lint + build + `test:e2e` — what CI runs |
+| `npm run doctor` | Deployment diagnostics (not a test; see DEPLOYMENT.md) |
 | `npm run lint`, `npm run build` | ESLint, production bundle |
 
 Component tests render React to static markup through a small module loader (`src/client/testing`), so no DOM library is needed.
@@ -46,6 +49,11 @@ The evaluation harness (`src/eval`) runs fixture tasks — fix a bug, add a test
 recover from a failing test — in disposable repositories and reports, per task: success (an objective check, not the
 model's claim), validation status, turns, tool calls, duplicate calls, files changed and unnecessary files changed,
 tokens and duration. It reports raw numbers and does not rank providers.
+
+### Dogfooding
+
+`npm run dogfood` has BLUSWAN repair a seeded defect in a disposable worktree of its own repository (scripted model by default; `-- --provider <id>` for a real one).
+The checkout you run it from is never modified and nothing is pushed. See [DOGFOODING.md](DOGFOODING.md); raw provider baselines live in [BASELINES.md](BASELINES.md).
 
 ## Conventions
 

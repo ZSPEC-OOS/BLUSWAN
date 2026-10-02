@@ -115,6 +115,18 @@ Hydration (`sessionHydrator.js`): load → migrate/validate → re-attach the wo
 
 `npm run server` hosts the runtime. Every route but `/api/health` authenticates (`BLUSWAN_AUTH=none` for one local user on loopback only; `firebase` verifies ID tokens server-side). Each user gets an isolated runtime, so other users' ids resolve to "not found" — in lists, operations and the event stream alike. Events cross the boundary unchanged as Server-Sent Events with stable ids; the client de-duplicates on reconnect. See [SECURITY.md](SECURITY.md).
 
+### Connection model (browser ↔ runtime)
+
+`createRemoteRuntime` owns an explicit state machine, independent of React: `starting → checking_server → authenticating → loading_bootstrap →
+connecting_stream → online`, then `reconnecting` when the stream drops, and `offline_cached`, `server_unreachable`, `auth_error`,
+`server_error` when the runtime cannot be used. Boot is health → readiness → token → bootstrap → stream; every failure is classified
+(`server_unreachable`, `server_not_ready`, `authentication_failed`, `persistence_unavailable`, `workspace_host_unavailable`,
+`configuration_error`, `client_server_version_mismatch`, `unknown_server_error`) with a retry policy (bounded backoff 0.5→15 s; never for
+auth, configuration or version problems). With a cached session list the app renders read-only (`offline_cached`) and recovers without a
+reload. A silent stream (no heartbeat for 45 s) is treated as dropped; after any drop the client resyncs from the runtime's canonical
+state and de-duplicates events by id. `diagnoseConnection()` probes each stage separately for the "Connection details" view.
+`protocolVersion` (independent of the release) is checked on `/api/health` and the stream `hello`.
+
 ## Client
 
 The UI is a projection of runtime events: `projectEvents` turns the canonical event stream into transcript entries, grouped activity, permission prompts and notices; a framework-free store feeds React through `useSyncExternalStore`. The workspace panel (changes, validation, commands) fetches git-backed state and per-file diffs on demand and caches them by workspace revision. Layout adapts: three columns on desktop, sheets on mobile.

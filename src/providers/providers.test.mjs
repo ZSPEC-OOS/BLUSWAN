@@ -149,7 +149,7 @@ describe('deepseek adapter', () => {
 
 describe('runtime config', () => {
   it('reads env and redacts secrets', () => {
-    const c = loadRuntimeConfig({ VITE_DEEPSEEK_API_KEY: 'sk-secret', VITE_DEEPSEEK_MODEL: 'deepseek-chat' })
+    const c = loadRuntimeConfig({ DEEPSEEK_API_KEY: 'sk-secret', DEEPSEEK_MODEL: 'deepseek-chat' })
     assert.equal(c.providers.deepseek.apiKey, 'sk-secret')
     assert.equal(c.defaultModel, 'deepseek-chat')
     assert.equal(c.defaultProvider, 'deepseek')

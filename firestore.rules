@@ -1,0 +1,11 @@
+rules_version = '2';
+// BLUSWAN session data is written and read only by the BLUSWAN server (Admin SDK, which bypasses these rules).
+// Browsers get no direct access to it: sessions can contain repository contents and command output.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId}/sessions/{document=**} { allow read, write: if false; }
+    match /users/{userId}/sessionIndex/{document=**} { allow read, write: if false; }
+    match /users/{userId}/workspaces/{document=**} { allow read, write: if false; }
+    match /users/{userId}/settings/{document=**} { allow read, write: if false; }
+  }
+}

@@ -3,14 +3,13 @@ import { MODE_INFO, PERMISSION_MODES } from '../../tools/permissionModes.js'
 import './settings.css'
 
 /**
- * Modal settings: model connection, permission mode, repository, account. The API key is write-only in the
- * UI (shown masked) and never leaves the settings store / provider.
+ * Modal settings: model, permission mode, repository, account. Provider credentials are not editable here: they are
+ * configured on the BLUSWAN server, and this panel only shows whether a provider is configured.
  */
-export default function SettingsPanel({ settings, onSave, permissionMode, onPermissionMode, canOpenWorkspaces, onOpenWorkspace, setup, userEmail, onSignOut, onClose }) {
-  const [draft, setDraft] = useState(() => ({ model: settings.model, apiKey: '', baseUrl: settings.baseUrl }))
+export default function SettingsPanel({ settings, providers = [], onSave, permissionMode, onPermissionMode, canOpenWorkspaces, onOpenWorkspace, setup, userEmail, onSignOut, onClose }) {
+  const [draft, setDraft] = useState(() => ({ model: settings.model }))
   const [path, setPath] = useState('')
   const dialog = useRef(null)
-  const keySet = !!settings.apiKey
 
   useEffect(() => {
     dialog.current?.focus()
@@ -26,16 +25,15 @@ export default function SettingsPanel({ settings, onSave, permissionMode, onPerm
 
         <section aria-labelledby="set-model">
           <h3 id="set-model">Model</h3>
-          {!setup?.ready ? <p className="settings__warn" role="status">{setup?.message ?? 'A model provider needs to be configured.'}</p> : null}
-          <label className="field"><span>Provider</span><select value="deepseek" disabled aria-label="Provider"><option value="deepseek">DeepSeek</option></select></label>
-          <label className="field"><span>Model</span><input value={draft.model} placeholder="e.g. deepseek-chat" onChange={(e) => setDraft({ ...draft, model: e.target.value })} /></label>
-          <label className="field"><span>API key</span><input type="password" autoComplete="off" value={draft.apiKey} placeholder={keySet ? '•••••••• (saved — enter a new key to replace)' : 'Paste your API key'} onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })} /></label>
-          <label className="field"><span>Base URL (optional)</span><input value={draft.baseUrl} placeholder="https://api.deepseek.com" onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })} /></label>
-          <p className="settings__hint">The key is stored in this browser only.</p>
-          <div className="settings__row">
-            <button type="button" className="btn btn--primary" onClick={() => onSave({ model: draft.model, baseUrl: draft.baseUrl, ...(draft.apiKey ? { apiKey: draft.apiKey } : {}) })}>Save</button>
-            {keySet ? <button type="button" className="btn btn--ghost" onClick={() => onSave({ apiKey: '' })}>Remove saved key</button> : null}
-          </div>
+          {providers.map(p => (
+            <p key={p.provider} className={`settings__provider ${p.configured ? 'is-ok' : 'is-missing'}`} role="status">
+              <strong>{p.label}</strong> {p.configured ? 'configured' : 'not configured'}
+              <span className="settings__hint"> — {p.configured ? 'the API key is held by the BLUSWAN server and is never sent to this browser.' : 'ask the administrator to set it on the server.'}</span>
+            </p>
+          ))}
+          {!setup?.ready && !providers.length ? <p className="settings__warn" role="status">{setup?.message ?? 'A model provider needs to be configured.'}</p> : null}
+          <label className="field"><span>Model</span><input value={draft.model} placeholder={providers[0]?.model || 'e.g. deepseek-chat'} onChange={(e) => setDraft({ ...draft, model: e.target.value })} /></label>
+          <div className="settings__row"><button type="button" className="btn btn--primary" onClick={() => onSave({ model: draft.model })}>Save</button></div>
         </section>
 
         <section aria-labelledby="set-perm">

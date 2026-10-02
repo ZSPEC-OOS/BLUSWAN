@@ -1,5 +1,6 @@
 import { MODE_INFO, PERMISSION_MODES } from '../../tools/permissionModes.js'
 import SessionStatus from './SessionStatus.jsx'
+import SaveIndicator from './SaveIndicator.jsx'
 import './status.css'
 
 /** Repository identity, state, changed-file count, model and permission mode, always visible above the conversation. */
@@ -19,6 +20,7 @@ export default function ChatHeader({ active, workspace, model, permissionMode, o
         ) : <span className="topbar__muted">No repository connected</span>}
       </div>
       <SessionStatus status={status} workingLabel={active?.view.workingLabel} />
+      <SaveIndicator status={active?.persistence} hasMessages={!!active?.view.entries.some(e => e.kind === 'user')} />
       <span className="topbar__spacer" />
       {onToggleChanges ? (
         <button type="button" className="btn topbar__changes" onClick={onToggleChanges} aria-pressed={panelOpen} aria-label={changed ? `${changed} ${changed === 1 ? 'file' : 'files'} changed — toggle workspace panel` : 'Toggle workspace panel'} title="Changes, validation and commands (Ctrl+Shift+D)">

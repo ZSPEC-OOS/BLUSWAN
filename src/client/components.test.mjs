@@ -107,11 +107,50 @@ describe('whole shell', () => {
     assert.doesNotMatch(html, /\b(V1|V2|V3|engine|cycle|completion gate|migration|dashboard)\b/i)
     store.destroy()
   })
-  it('settings panel masks credentials and lists the three permission modes', async () => {
-    const settings = createSettingsStore({ storage: null }); settings.update({ apiKey: 'sk-secret-123' })
-    const html = await render(await h(C.settings, { settings: settings.get(), onSave: noop, permissionMode: 'ask', onPermissionMode: noop, canOpenWorkspaces: false, onOpenWorkspace: noop, setup: { ready: false, message: 'Add an API key.' }, onClose: noop }))
-    assert.doesNotMatch(html, /sk-secret-123/); assert.match(html, /Add an API key/)
+  it('settings panel lists the three permission modes and shows setup problems', async () => {
+    const settings = createSettingsStore({ storage: null })
+    const html = await render(await h(C.settings, { settings: settings.get(), onSave: noop, permissionMode: 'ask', onPermissionMode: noop, canOpenWorkspaces: false, onOpenWorkspace: noop, setup: { ready: false, message: 'The model provider is not configured on the server.' }, onClose: noop }))
+    assert.match(html, /not configured on the server/)
     for (const m of ['Ask', 'Auto Edit', 'Full Auto']) assert.match(html, new RegExp(m))
     assert.match(html, /role="dialog"/)
+  })
+})
+
+describe('persistence and restore UI', () => {
+  let M
+  before(async () => {
+    M = {
+      save: (await importComponent('status/SaveIndicator.jsx')).default,
+      reconnect: (await importComponent('workspace/ReconnectWorkspace.jsx')).default,
+      conversation: (await importComponent('chat/ConversationView.jsx')).default,
+      settings: (await importComponent('settings/SettingsPanel.jsx')).default,
+    }
+  })
+  it('save indicator is quiet: nothing for drafts, honest about failures', async () => {
+    assert.equal(await render(await h(M.save, { status: 'saved', hasMessages: false })), '')
+    assert.match(await render(await h(M.save, { status: 'saving', hasMessages: true })), /Saving…/)
+    assert.match(await render(await h(M.save, { status: 'saved', hasMessages: true })), />Saved</)
+    assert.match(await render(await h(M.save, { status: 'failed', hasMessages: true })), /isn.{1,6}t synced yet/)
+    assert.match(await render(await h(M.save, { status: 'conflict', hasMessages: true })), /Changed elsewhere/)
+  })
+  it('reconnect form explains that the conversation is intact', async () => {
+    const html = await render(await h(M.reconnect, { name: 'acme', reason: 'The repository folder no longer exists.', onReconnect: noop }))
+    assert.match(html, /Workspace unavailable: acme/); assert.match(html, /Conversation restored\. Reconnect this repository to continue coding/); assert.match(html, /Reconnect workspace/)
+  })
+  const active = (o = {}) => ({ id: 's', view: { entries: [], status: 'ready', pendingPermission: null }, composer: { disabled: false, canStop: false, busy: false, reason: null }, workspace: { name: 'acme', available: true }, ...o })
+  const convo = async (props) => render(await h(M.conversation, { active: active(), notice: null, setup: { ready: true }, canOpenWorkspaces: true, onSend: noop, onStop: noop, onApprove: noop, onDeny: noop, onOpenSettings: noop, onDismissNotice: noop, ...props }))
+  it('conversation shows restoring, restore failure, offline and missing-workspace states', async () => {
+    assert.match(await convo({ active: active({ loading: true, composer: { disabled: true, reason: 'Restoring this conversation…' } }) }), /Restoring this conversation/)
+    assert.match(await convo({ active: active({ loadError: 'The server is unreachable.' }), onRetryLoad: noop }), /couldn.{1,6}t be restored[\s\S]*Try again/)
+    assert.match(await convo({ connection: { state: 'reconnecting', offlineIndex: false } }), /Connection lost — reconnecting/)
+    assert.match(await convo({ connection: { state: 'offline', offlineIndex: true } }), /Offline — showing your saved session list/)
+    assert.doesNotMatch(await convo({ connection: { state: 'online' } }), /banner-offline/)
+    assert.match(await convo({ active: active({ workspaceMissing: true, workspace: { name: 'acme', available: false } }), onReconnectWorkspace: noop }), /Workspace unavailable: acme/)
+  })
+  it('settings panel reports provider status without any key field', async () => {
+    const html = await render(await h(M.settings, { settings: { model: '' }, providers: [{ provider: 'deepseek', label: 'DeepSeek', configured: true, model: 'deepseek-chat' }], onSave: noop, permissionMode: 'ask', onPermissionMode: noop, canOpenWorkspaces: true, onOpenWorkspace: noop, setup: { ready: true }, onClose: noop }))
+    assert.match(html, /DeepSeek<\/strong> configured/); assert.match(html, /never sent to this browser/)
+    assert.doesNotMatch(html, /type="password"|placeholder="Paste/i); assert.equal((html.match(/<input/g) ?? []).length, 5, 'model, three permission modes, repository path — and no credential field')
+    assert.match(await render(await h(M.settings, { settings: { model: '' }, providers: [{ provider: 'deepseek', label: 'DeepSeek', configured: false }], onSave: noop, permissionMode: 'ask', onPermissionMode: noop, canOpenWorkspaces: true, onOpenWorkspace: noop, setup: { ready: false }, onClose: noop })), /not configured[\s\S]*administrator/)
   })
 })

@@ -19,7 +19,10 @@ export default function AuthBoundary({ children }) {
 
   if (!ready) return <Splash />
   return children({
+    id: user?.uid ?? 'local',
     email: user?.email || null,
+    // The ID token is attached to requests to the BLUSWAN server, which verifies it; the browser never holds provider keys.
+    getToken: user ? () => user.getIdToken() : async () => null,
     signOut: user ? () => signOutUser().catch(() => {}) : null,
   })
 }

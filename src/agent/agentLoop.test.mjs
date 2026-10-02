@@ -63,7 +63,7 @@ describe('agent loop', () => {
       // events: deterministic ordering
       assert.deepEqual(h.types().filter(t => t !== 'assistant.text.delta'), [
         'user.message', 'session.updated', 'assistant.text.completed', 'tool.started', 'tool.completed',
-        'tool.started', 'file.changed', 'tool.completed', 'tool.started', 'tool.completed',
+        'tool.started', 'file.changed', 'tool.completed', 'tool.started', 'tool.completed', 'command.completed',
         'assistant.text.completed', 'session.completed'])
 
       // session state

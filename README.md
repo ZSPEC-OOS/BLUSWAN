@@ -2,7 +2,7 @@
 
 A chat-first coding agent. The user describes a coding task in natural language; the agent runtime works against a repository through tools and continues naturally from follow-up messages in the same session.
 
-> **Status:** Phase 7 (review workspace). On top of the Phase 6 chat, a right-hand panel (a sheet on mobile) shows what BLUSWAN changed — git-backed changed files with exact line counts, per-file unified diffs, command output, validation details — and lets you revert a single file after confirmation. DeepSeek is still the **only** production provider. Persistence (reloading loses conversations), a commit/push workflow, an interactive terminal and additional providers are not implemented yet.
+> **Status:** Phase 8 (durable sessions, secure runtime). The runtime, tools and provider credentials now run in the BLUSWAN server; the browser is a client of it (HTTP + Server-Sent Events carrying the canonical event protocol). Sessions autosave behind a persistence adapter and come back after a reload or restart: completed sessions as completed, running ones as *interrupted*, with the workspace re-attached and reconciled from the repository's real state. DeepSeek is still the **only** production provider; the legacy V1/V2 tree still exists in the repository but nothing in the active path imports it.
 
 ## Architecture
 
@@ -33,6 +33,38 @@ user message
 **Provider abstraction.** Provider-specific behavior (endpoints, auth, streaming format, tool schemas, error mapping) lives only in adapters. Adapters expose capabilities and emit provider-neutral events (`text_delta`, `reasoning_status`, `tool_call`, `usage`, `completed`); failures are normalized to `{ code, message, provider, retryable, cause }`.
 
 **Sessions.** A session holds normalized messages, events, tool calls, changed files, status, and token usage. Statuses: `idle`, `running`, `waiting_permission`, `waiting_user`, `completed`, `error`, `cancelled`. Cancellation propagates through an `AbortController` to the provider request.
+
+## Durable sessions and the server (Phase 8)
+
+**Architecture.** `browser → HTTP/SSE → src/server → per-user runtime → provider / tools / git`. The client (`src/client/runtime/createRemoteRuntime.js`) keeps a mirror of server state fed by the canonical event stream and implements the same interface the UI store already used; there is one runtime implementation (`src/agent/runtime.js`), used by the server and the CLI. Stop, permission approvals, repository operations, diffs and revert are API calls; the browser never executes provider or tool logic.
+
+**Persistence.** One contract (`src/persistence/persistence.js`) and one generic adapter over a tiny document store (`docStore.js`); backends only implement `get/put/delete/list/deleteTree`:
+
+| Backend | Where | Used for |
+|---|---|---|
+| memory | `adapters/memoryPersistence.js` | tests, `BLUSWAN_PERSISTENCE=memory` |
+| file | `adapters/filePersistence.js` | **primary** for local / single-user servers (atomic JSON files) |
+| Firestore | `adapters/firebasePersistence.js` | **primary** for authenticated cloud servers (Admin API; documents chunked below 1 MiB; `firestore.rules` denies all direct client access) |
+| IndexedDB | `adapters/localPersistence.js` | browser cache of the session list (offline display); never the source of truth |
+
+Everything is scoped by user id in the storage path (`users/{uid}/…`), so another user's ids resolve to "not found". Writes carry an expected revision (optimistic concurrency): a stale writer gets `persistence_conflict` and the session stops saving instead of overwriting newer data.
+
+**What is stored.** A versioned record per session (`schemaVersion`, migrations in `migration.js`): messages, compacted events, tool history, runs, changed files, context summary, validation state, token usage, bounded + redacted command output, a workspace snapshot, revision. Not stored: abort controllers, processes, streams, callbacks, provider clients, credentials. Text deltas are never persisted (a message is stored once, when it completes); events are capped at 4000, tool output at 20 000 characters per message, command output at 64 000 per stream. A separate lightweight **index** record per session serves the sidebar, so listing never loads transcripts. A draft with no user message is not stored. Saves are immediate for state changes, debounced for high-frequency events, retried with bounded backoff, and never interrupt a run; the UI shows *Saving / Saved / isn't synced yet*.
+
+**Restore semantics.**
+- Completed / idle / failed sessions restore as they were. The transcript is rebuilt from stored events; the conversation continues from the stored context summary plus recent messages.
+- A session that was *running* or *waiting for approval* restores as **interrupted**: nothing from the dead process is resumed or replayed. Unfinished tool calls get an explicit "unknown effect" result so the model checks the workspace instead of assuming.
+- The workspace is re-attached from its stored reference (a host-bound path, offered only on the host that owns it) and **reconciled from reality**: changed files come from git now; if the commit, branch or uncommitted files differ from what the session last saw, validation becomes *stale* and the conversation says so. A missing workspace keeps the transcript and offers *Reconnect workspace*.
+- Partial streamed text that was not part of a completed message is discarded.
+- Corrupt or too-new records fail with `persistence_invalid_record` / `persistence_schema_unsupported`; other sessions are unaffected.
+
+**Credentials.** `src/providers/credentials/` is the only way the runtime obtains a provider key; the server reads `DEEPSEEK_API_KEY` from its environment. The key is not present in any API response, event, stored record or log, and the browser holds no provider key: earlier versions' keys in `localStorage`/`sessionStorage` are removed at startup (`scrubLegacySecrets`). Per-user keys are not supported yet; doing it safely needs a server-side secrets service, so only server-configured credentials exist. The settings panel shows "DeepSeek configured" and nothing else.
+
+**Authentication and ownership.** Every route but `/api/health` verifies a bearer token (`src/server/auth.js`; Firebase ID tokens are verified server-side with Google's certificates). Each user gets an isolated runtime; ids from other users are "not found", including on the stream. Sign-out stops the user's runs, flushes saves and drops in-memory state; stored sessions stay. Caches are namespaced by user and cleared on logout.
+
+**Retention.** Deleting a session removes its record and index entry (never repository files). `clearUser` removes everything stored for a user. Infrastructure backups follow your hosting policy.
+
+**Not done.** Local-to-cloud import, session export, message pagination (long transcripts are loaded whole), per-user provider keys, multi-instance coordination (one server process owns a user's live runs), exactly-once streaming (reconnects re-sync and de-duplicate by event id).
 
 ## Review workspace (Phase 7)
 
@@ -245,19 +277,21 @@ const diff = await runtime.executeTool(session.id, { name: 'git_diff', input: {}
 
 ```bash
 npm install
-cp .env.example .env     # set VITE_DEEPSEEK_API_KEY and VITE_DEEPSEEK_MODEL
-npm run dev
+cp .env.example .env     # set DEEPSEEK_API_KEY and DEEPSEEK_MODEL (server-side only)
+npm run server           # BLUSWAN server on http://127.0.0.1:8787 (runtime, credentials, persistence)
+npm run dev              # web app; /api is proxied to the server
 ```
 
-| Variable | Purpose |
+| Server variable | Purpose |
 |---|---|
-| `VITE_DEEPSEEK_API_KEY` (or `DEEPSEEK_API_KEY` in Node) | DeepSeek API key (required) |
-| `VITE_DEEPSEEK_MODEL` (or `DEEPSEEK_MODEL`) | DeepSeek model identifier (required; no default is assumed) |
-| `VITE_DEEPSEEK_BASE_URL` (or `DEEPSEEK_BASE_URL`) | API base URL (default `https://api.deepseek.com`) |
+| `DEEPSEEK_API_KEY` | DeepSeek API key. **Server only** — never prefix it with `VITE_` (Vite compiles `VITE_*` values into the browser bundle); a `VITE_` key is ignored. |
+| `DEEPSEEK_MODEL`, `DEEPSEEK_BASE_URL` | Model identifier (required; no default is assumed) and API base URL |
+| `BLUSWAN_PORT`, `BLUSWAN_HOST` | Listen address (default `127.0.0.1:8787`) |
+| `BLUSWAN_AUTH` | `none` (one local user; the server refuses to listen on a non-loopback address) or `firebase` (verifies Firebase ID tokens; needs `FIREBASE_PROJECT_ID`) |
+| `BLUSWAN_PERSISTENCE` | `file` (default, under `BLUSWAN_DATA_DIR`, `.bluswan/data`), `memory`, or `firebase` (Firestore through `firebase-admin`) |
+| `BLUSWAN_WORKSPACE_ROOTS` | Colon-separated folders repositories may be opened under (required with authentication) |
 
-Other runtime settings (`VITE_BLUSWAN_MAX_TURNS`, `…_MAX_TRANSPORT_RETRIES`, `…_REQUEST_TIMEOUT_MS`, `…_STREAM_TIMEOUT_MS`, `VITE_BLUSWAN_LIMIT_*`) live in `src/config/runtimeConfig.js`.
-
-Browser-side execution is temporary: any `VITE_*` value is exposed to the client bundle, so do not ship a production key this way. The adapter takes its configuration by injection so execution can move server-side without changing the provider interface.
+Other runtime settings (`VITE_BLUSWAN_MAX_TURNS`, `…_REQUEST_TIMEOUT_MS`, `VITE_BLUSWAN_LIMIT_*`, …) are non-secret and live in `src/config/runtimeConfig.js`.
 
 ## Scripts
 
@@ -267,6 +301,9 @@ Browser-side execution is temporary: any `VITE_*` value is exposed to the client
 | `npm run build` | Production build |
 | `npm run lint` | ESLint |
 | `npm test` | Unit and integration tests (no network or API key required) |
+| `npm run test:persistence` | Persistence contract on every backend, serializer, migrations, autosave, hydration, workspace reconciliation |
+| `npm run test:server` | HTTP/SSE server: auth, ownership, credentials, Stop, permissions, restart; browser↔server end to end |
+| `npm run server` | Start the BLUSWAN server |
 | `npm run test:diff` | Diff parser, terminal-text sanitizer, git changes, per-file diff, revert, command log |
 | `npm run test:workspace-ui` | Workspace panels, store and the Phase 7 end-to-end review scenario |
 | `npm run test:client` | Client store, projection, Markdown, components (SSR), permissions, Phase 6 integration |

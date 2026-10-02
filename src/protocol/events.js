@@ -26,6 +26,7 @@ export const EVENT_TYPES = Object.freeze([
   'session.completed',
   'session.failed',
   'session.cancelled',
+  'session.interrupted',
 ])
 
 /** @returns {{id:string,type:string,sessionId:string,timestamp:number,data:object}} */

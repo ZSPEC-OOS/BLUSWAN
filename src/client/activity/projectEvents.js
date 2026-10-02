@@ -8,11 +8,11 @@ import { friendlyError, friendlyToolError, technicalDetails } from './friendlyEr
 const SUBDUED = new Set(['read', 'search', 'git'])
 
 /** Converts runtime session status into the user-facing state. */
-export const STATUS_LABEL = Object.freeze({ ready: 'Ready', working: 'Working', waiting: 'Waiting for approval', completed: 'Completed', stopped: 'Stopped', error: 'Error' })
+export const STATUS_LABEL = Object.freeze({ ready: 'Ready', working: 'Working', waiting: 'Waiting for approval', completed: 'Completed', stopped: 'Stopped', interrupted: 'Interrupted', error: 'Error' })
 
 /** Status of a session that has not produced events yet / from a runtime snapshot. */
 export function statusFromRuntime(runtimeStatus) {
-  return ({ running: 'working', waiting_permission: 'waiting', completed: 'completed', cancelled: 'stopped', error: 'error' })[runtimeStatus] ?? 'ready'
+  return ({ running: 'working', waiting_permission: 'waiting', completed: 'completed', cancelled: 'stopped', interrupted: 'interrupted', error: 'error' })[runtimeStatus] ?? 'ready'
 }
 
 /** @returns {{push(event):void, getView():object, firstUserText():string|null}} */
@@ -86,6 +86,16 @@ export function createProjector() {
         for (const x of items) itemIndex.set(x.id, { entry: next })
       }
     }
+  }
+
+  /** What a restored conversation should say about its workspace; nothing for the ordinary case. */
+  function restoredNotices(d) {
+    if (d.workspace === 'unavailable' || d.workspace === 'needs_reconnect') {
+      add({ kind: 'notice', id: `n:${++seq}`, tag: 'restore', tone: 'warning', text: `Conversation restored. Reconnect the workspace to continue coding.${d.workspaceReason ? ` ${d.workspaceReason}` : ''}` })
+      return
+    }
+    if (d.branchChanged) add({ kind: 'notice', id: `n:${++seq}`, tag: 'restore', tone: 'warning', text: `The repository is now on branch ${d.branchChanged.to ?? 'unknown'} (this conversation last saw ${d.branchChanged.from ?? 'unknown'}).` })
+    else if (d.workspaceChanged) add({ kind: 'notice', id: `n:${++seq}`, tag: 'restore', tone: 'subdued', text: 'The repository changed since this conversation last ran. Earlier test results no longer apply.' })
   }
 
   function onToolStarted(d) {
@@ -170,7 +180,13 @@ export function createProjector() {
       case 'session.updated':
         if (d.status === 'running') status = 'working'
         else if (d.status === 'waiting_permission') status = 'waiting'
+        if (d.restored) restoredNotices(d)
         bump()
+        break
+      case 'session.interrupted':
+        closeAll(); thinking = false; endRunningItems('stopped')
+        status = 'interrupted'; pending = null; lastOutcome = 'interrupted'
+        add({ kind: 'outcome', id: `o:int:${++seq}`, outcome: 'interrupted', text: 'Run interrupted', detail: 'This run was interrupted when the app closed. Work already applied is kept — you can continue the conversation.' })
         break
       case 'assistant.reasoning.status':
         thinking = true

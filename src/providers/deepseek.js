@@ -34,10 +34,10 @@ export function validateProvider(model, config = getProviderConfig(DEEPSEEK_ID))
 /** Throws configuration_error when required settings are absent. */
 export function validateConfig(config, model) {
   if (!config?.apiKey) {
-    throw err('configuration_error', 'DeepSeek API key is not configured (set VITE_DEEPSEEK_API_KEY).')
+    throw err('configuration_error', 'DeepSeek API key is not configured on the server (set DEEPSEEK_API_KEY).')
   }
   if (!config.baseUrl) throw err('configuration_error', 'DeepSeek base URL is not configured.')
-  if (!model) throw err('configuration_error', 'No DeepSeek model selected (set VITE_DEEPSEEK_MODEL).')
+  if (!model) throw err('configuration_error', 'No DeepSeek model selected (set DEEPSEEK_MODEL).')
 }
 
 export function buildHeaders(config) {

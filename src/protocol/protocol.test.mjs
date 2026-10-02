@@ -30,7 +30,7 @@ describe('event protocol', () => {
     assert.equal(isValidEvent(null), false)
   })
   it('supports every required event type', () => {
-    assert.equal(EVENT_TYPES.length, 24)
+    assert.equal(EVENT_TYPES.length, 25)
     for (const t of EVENT_TYPES) assert.ok(isValidEvent(createEvent(t, 's1')))
   })
 })
@@ -58,7 +58,7 @@ describe('session model', () => {
     assert.equal(updateSession(s, { id: 'other' }).id, s.id)
   })
   it('exposes all required statuses', () => {
-    assert.deepEqual([...SESSION_STATUSES].sort(), ['cancelled', 'completed', 'error', 'idle', 'running', 'waiting_permission', 'waiting_user'].sort())
+    assert.deepEqual([...SESSION_STATUSES].sort(), ['cancelled', 'completed', 'error', 'idle', 'interrupted', 'running', 'waiting_permission', 'waiting_user'].sort())
   })
   it('rejects invalid sessions', () => {
     assert.equal(isValidSession(null), false)
@@ -101,13 +101,12 @@ describe('session manager', () => {
     assert.throws(() => m.appendEvent(s.id, createEvent('user.message', 'other')), /Invalid event/)
     assert.throws(() => m.setStatus('nope', 'idle'), /Unknown session/)
   })
-  it('persists through the store and restores', async () => {
+  it('loads a persisted session into the live set', () => {
     const m1 = createSessionManager()
     const s = m1.create({ model })
-    m1.setStatus(s.id, 'waiting_user')
-    await new Promise(r => setImmediate(r))
-    const store = { loadSession: async () => m1.get(s.id) }
-    const m2 = createSessionManager({ store: { ...store, saveSession: async () => {} } })
-    assert.equal((await m2.restore(s.id)).status, 'waiting_user')
+    const m2 = createSessionManager()
+    assert.equal(m2.load({ ...s, status: 'waiting_user' }).status, 'waiting_user')
+    assert.equal(m2.get(s.id).status, 'waiting_user')
+    assert.throws(() => m2.load({ id: 'x' }), /invalid session/)
   })
 })

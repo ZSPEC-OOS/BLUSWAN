@@ -31,6 +31,9 @@ All normal tests are deterministic and offline (scripted models or mocked networ
 | `npm run test:client` | Client store, event projection, components (server-rendered), workspace review |
 | `npm run test:architecture` | Dependency directions, legacy-import guards, secret guards |
 | `npm run test:eval` | The evaluation harness itself |
+| `npm run test:e2e` | Browser suite (Playwright/Chromium): real runtime + built web app, scripted model, temporary repo and storage; desktop and phone viewports |
+| `npm run test:release` | `npm test` + lint + build + `test:e2e` — what CI runs |
+| `npm run doctor` | Deployment diagnostics (not a test; see DEPLOYMENT.md) |
 | `npm run lint`, `npm run build` | ESLint, production bundle |
 
 Component tests render React to static markup through a small module loader (`src/client/testing`), so no DOM library is needed.

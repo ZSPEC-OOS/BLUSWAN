@@ -22,7 +22,7 @@ npm run server           # runtime, credentials and storage: http://127.0.0.1:87
 npm run dev              # web app: http://localhost:5173
 ```
 
-Open a repository from **Settings → Repository**, start a chat, and ask for a change. Provider keys live only in the
+Check the setup any time with `npm run doctor`. Open a repository from **Settings → Repository**, start a chat, and ask for a change. Provider keys live only in the
 server's environment; the browser is only told whether a provider is configured.
 
 From a terminal instead: `npm run agent -- --workspace ../my-repo "Fix the failing parser test"`.
@@ -36,8 +36,27 @@ From a terminal instead: `npm run agent -- --workspace ../my-repo "Fix the faili
 | `BLUSWAN_PERSISTENCE`, `BLUSWAN_DATA_DIR` | `file` (default, `.bluswan/data`), `memory`, or `firebase` (Firestore via `firebase-admin`) |
 | `BLUSWAN_WORKSPACE_ROOTS` | Folders repositories may be opened under (required with authentication) |
 | `BLUSWAN_PORT`, `BLUSWAN_HOST` | Listen address (default `127.0.0.1:8787`) |
+| `BLUSWAN_CORS_ORIGIN` | Split-origin only: the one web origin allowed to call the runtime |
+| `BLUSWAN_MAX_TURNS`, `BLUSWAN_REQUEST_TIMEOUT_MS`, … | Server-owned agent tuning (formerly `VITE_BLUSWAN_*`, which no longer has any effect) |
+| `VITE_BLUSWAN_API_URL` | Web build only: the runtime's absolute URL for split-origin deployments (unset = same origin) |
 
-`.env.example` lists every variable by name. Secrets must never be prefixed with `VITE_`.
+`.env.example` lists every variable by name. The runtime validates its environment at startup and reports every problem at once.
+Secrets must never be prefixed with `VITE_`.
+
+## Deployment
+
+BLUSWAN is a **runtime** (agent, provider keys, storage, your repositories) plus a **web app** that talks to it. A static host alone is not enough.
+
+```text
+Mode A (local)    browser ─ Vite proxy ─► runtime 127.0.0.1:8787            one user, no sign-in, loopback only
+Mode B (remote)   browser ─ HTTPS ─► reverse proxy ─ /api ─► runtime        Firebase auth, workspace roots, persistent storage
+                                       └─ static dist/
+```
+
+Remote runtimes need `NODE_ENV=production`, `BLUSWAN_HOST=0.0.0.0`, `BLUSWAN_AUTH=firebase`, `FIREBASE_PROJECT_ID`, `BLUSWAN_WORKSPACE_ROOTS` and HTTPS.
+Same-origin behind one proxy is recommended; split-origin needs `VITE_BLUSWAN_API_URL` + `BLUSWAN_CORS_ORIGIN`. The runtime must run on the machine that owns the repositories.
+Liveness is `GET /api/health`, readiness is `GET /api/ready`. Full guide with nginx/Caddy examples, mobile guidance and operating notes: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+When something does not connect: [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) and `npm run doctor`.
 
 ## Scripts
 
@@ -47,10 +66,13 @@ From a terminal instead: `npm run agent -- --workspace ../my-repo "Fix the faili
 | `npm run agent` | Run the agent from the terminal against a local repository |
 | `npm test` | All offline tests (deterministic; no network, no live providers) |
 | `npm run lint` | ESLint |
+| `npm run doctor` | Checks environment, runtime, readiness, storage, workspace roots, event stream and CORS (`-- --url …`, `-- --live` for opt-in billable provider checks) |
+| `npm run test:e2e` | Builds the app and runs the browser suite (Chromium, desktop + phone viewport) against the real runtime with a scripted model — offline, free |
+| `npm run test:release` | `npm test` + lint + build + browser suite (no live providers) — the [release checklist](docs/RELEASE_CHECKLIST.md) gate |
 | `npm run test:deepseek` · `test:kimi` · `test:openai` · `test:anthropic` | Optional live smoke test per provider (needs credentials) |
 | `npm run eval -- --provider <id>` | Optional live coding evaluation with raw metrics |
 
-More: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) (setup, test matrix, evaluation) · [`docs/PROVIDERS.md`](docs/PROVIDERS.md) · [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`docs/SECURITY.md`](docs/SECURITY.md).
+More: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) (setup, test matrix, evaluation, dogfooding) · [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) · [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) · [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) · [`docs/PROVIDERS.md`](docs/PROVIDERS.md) · [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`docs/SECURITY.md`](docs/SECURITY.md).
 
 ## Architecture in one picture
 
@@ -79,6 +101,8 @@ now (validation turns *stale* if the code moved). If a repository is unavailable
 - Command classification is conservative but is not a sandbox — use OS-level isolation for untrusted code.
 - No commit/push/PR workflow, no embedded editor or terminal, no automatic model routing.
 - Long transcripts are loaded whole when a session opens.
+- One runtime process owns a user's live runs; there is no multi-instance coordination.
+- The browser suite stands in for Firebase sign-in with an identity-aware gateway (the emulator is not available offline); the sign-in screen itself is checked manually.
 
 ## History
 

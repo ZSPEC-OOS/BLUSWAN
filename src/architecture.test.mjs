@@ -160,7 +160,7 @@ describe('release-stabilization guards', () => {
   })
   it('server-owned tuning is not read from VITE_ variables: only the public API URL and Firebase web config are', () => {
     for (const f of all.filter(x => !/\.test\.mjs$/.test(x))) {
-      for (const m of strip(read(f)).matchAll(/VITE_[A-Z0-9_]+/g)) assert.ok(/^VITE_(BLUSWAN_API_URL|FIREBASE_(API_KEY|AUTH_DOMAIN|PROJECT_ID|APP_ID))$/.test(m[0]), `${rel(f)} reads ${m[0]}`)
+      for (const m of strip(read(f)).matchAll(/VITE_[A-Z0-9_]+/g)) assert.ok(/^VITE_(BLUSWAN_API_URL|FIREBASE_(API_KEY|AUTH_DOMAIN|PROJECT_ID|APP_ID|))$/.test(m[0]), `${rel(f)} reads ${m[0]}`)
     }
   })
   it('browser code does not read the whole import.meta.env object (it would inline every VITE_ variable)', () => {

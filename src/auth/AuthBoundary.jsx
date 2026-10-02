@@ -5,7 +5,7 @@
 // is not already known from an earlier visit) a connection screen explains why and keeps retrying.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import SignIn from './SignIn.jsx'
-import { isFirebaseConfigured, onAuthStateChange, signOutUser } from './firebaseAuth.js'
+import { isFirebaseConfigured, missingFirebaseSettings, onAuthStateChange, signOutUser } from './firebaseAuth.js'
 import ConnectionScreen from '../client/status/ConnectionScreen.jsx'
 import { probeHealth } from '../client/runtime/connectivity.js'
 import { resolveApiUrl, rememberedAuthMode, rememberAuthMode } from '../client/runtime/apiUrl.js'
@@ -52,7 +52,7 @@ export default function AuthBoundary({ children }) {
       : <ConnectionScreen connection={{ state: 'checking_server' }} />
   }
   if (effectiveMode === 'none') return children(LOCAL)
-  if (!isFirebaseConfigured()) return <ConnectionScreen kind="configuration_error" message="This runtime requires sign-in, but this build of the app has no Firebase web configuration (see docs/DEPLOYMENT.md)." />
+  if (!isFirebaseConfigured()) return <ConnectionScreen kind="configuration_error" message={`This runtime requires sign-in, but this build of the app is missing its Firebase web settings: ${missingFirebaseSettings().join(', ')}. Rebuild with them set (see docs/DEPLOYMENT.md).`} />
   if (user === undefined) return <ConnectionScreen connection={{ state: 'authenticating' }} />
   if (!user) return <SignIn />
   return children({ id: user.uid, email: user.email || null, getToken: () => user.getIdToken(), signOut: () => signOutUser().catch(() => {}) })

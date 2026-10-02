@@ -15,6 +15,9 @@ let auth = null
 
 export const isFirebaseConfigured = () => !!(CONFIG.apiKey && CONFIG.projectId)
 
+/** Names (never values) of the public Firebase settings this build is missing, for an actionable message. */
+export const missingFirebaseSettings = () => [['VITE_FIREBASE_API_KEY', CONFIG.apiKey], ['VITE_FIREBASE_PROJECT_ID', CONFIG.projectId], ['VITE_FIREBASE_AUTH_DOMAIN', CONFIG.authDomain], ['VITE_FIREBASE_APP_ID', CONFIG.appId]].filter(([, v]) => !v).map(([n]) => n)
+
 function init() {
   if (app) return app
   if (!isFirebaseConfigured()) throw new Error('Firebase is not configured (set VITE_FIREBASE_* variables).')

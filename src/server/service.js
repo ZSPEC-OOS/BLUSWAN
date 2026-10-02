@@ -21,6 +21,7 @@ import { getRuntimeConfig, getProviderConfig } from '../config/runtimeConfig.js'
 import { createError, isBluswanError } from '../protocol/schemas.js'
 import { isPermissionMode } from '../tools/permissionModes.js'
 import { createLogger } from '../utils/logger.js'
+import { createGithubFeature } from './github/feature.js'
 
 const log = createLogger('service')
 const SENDABLE = new Set(['idle', 'completed', 'cancelled', 'error', 'waiting_user', 'interrupted'])
@@ -41,7 +42,7 @@ const indexFromLive = (s, userId, persistenceStatus) => ({
  * @param {{persistence:object, credentials:object, hostId?:string, allowedRoots?:string[]|null, config?:object,
  *          providerFactory?:(user:object, credentials:object)=>object, autosave?:object}} deps
  */
-export function createBluswanService({ persistence, credentials, hostId = os.hostname(), allowedRoots = null, config = getRuntimeConfig(), providerFactory = null, autosave: autosaveOptions = {}, limits = {} }) {
+export function createBluswanService({ persistence, credentials, hostId = os.hostname(), allowedRoots = null, config = getRuntimeConfig(), providerFactory = null, autosave: autosaveOptions = {}, limits = {}, githubOptions = null }) {
   const maxLiveSessions = limits.maxLiveSessions ?? 500 // per user: guards against runaway session creation
   const maxConcurrentRuns = limits.maxConcurrentRuns ?? 8 // per user, across sessions
   let draining = false
@@ -60,6 +61,7 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
       })
       const runtime = createAgentRuntime({
         providers: createProviderRegistry(adapters), sessions: createSessionManager(), workspaces, approvals: 'interactive',
+        workspaceNotes: (workspaceId) => service.github.agentNotes(user, workspaceId),
         config: { ...config, permissionMode: settings.permissionMode },
       })
       const listeners = new Set()
@@ -140,12 +142,14 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
 
   const service = {
     hostId,
+    /** GitHub workflow (connection, repositories, branches, pull requests). Inert unless configured. */
+    github: null,
 
     async bootstrap(user) {
       const ctx = await ctxOf(user)
       return {
         user, hostId, providers: credentials.describe(user), models: modelCatalog(ctx, user), defaultModel: defaultModel(ctx, user), settings: ctx.settings, permissionMode: ctx.runtime.getPermissionMode(),
-        workspaces: await listWorkspaces(ctx), canOpenWorkspaces: true, sessions: await service.listSessions(user, {}),
+        workspaces: await service.github.decorate(user, await listWorkspaces(ctx)), canOpenWorkspaces: true, sessions: await service.listSessions(user, {}),
       }
     },
 
@@ -193,6 +197,7 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
       if (ctx.runtime.listSessions().filter(x => x.status === 'running' || x.status === 'waiting_permission').length >= maxConcurrentRuns) {
         throw createError({ code: 'too_many_requests', message: 'Too many conversations are running at once. Wait for one to finish.', retryable: true })
       }
+      if (s.workspaceId) service.github.noteSession(user, id, s.workspaceId)
       ctx.runtime.sendMessage(id, content).catch(e => log.warn('run failed to start', { sessionId: id, code: isBluswanError(e) ? e.code : 'error' }))
       return { accepted: true }
     },
@@ -229,7 +234,7 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
     },
 
     // ─── workspaces ──────────────────────────────────────────────────────────
-    async listWorkspaces(user) { return listWorkspaces(await ctxOf(user)) },
+    async listWorkspaces(user) { return service.github.decorate(user, await listWorkspaces(await ctxOf(user))) },
     async openWorkspace(user, { root } = {}) {
       const ctx = await ctxOf(user)
       if (typeof root !== 'string' || !root.trim()) throw createError({ code: 'invalid_request', message: 'Enter the path of a repository.' })
@@ -335,5 +340,13 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
       contexts.delete(user.id)
     },
   }
+  const rootsForClones = allowedRoots?.length ? allowedRoots : [os.homedir()]
+  service.github = createGithubFeature({
+    ctxOf, persistence, roots: rootsForClones, settings: githubOptions?.settings ?? { configured: false }, secrets: githubOptions?.secrets ?? {},
+    api: githubOptions?.api, webApi: githubOptions?.webApi ?? githubOptions?.api, appAuth: githubOptions?.appAuth, cloneUrlOk: githubOptions?.cloneUrlOk ?? (() => false),
+    openWorkspace: async (user, root) => service.openWorkspace(user, { root }),
+    activeContexts: async () => (await Promise.all([...contexts.values()].map(p => p.catch(() => null)))).filter(Boolean),
+    ...(githubOptions?.feature ?? {}),
+  })
   return service
 }

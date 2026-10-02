@@ -38,6 +38,7 @@ From a terminal instead: `npm run agent -- --workspace ../my-repo "Fix the faili
 | `BLUSWAN_PORT`, `BLUSWAN_HOST` | Listen address (default `127.0.0.1:8787`) |
 | `BLUSWAN_CORS_ORIGIN` | Split-origin only: the one web origin allowed to call the runtime |
 | `BLUSWAN_MAX_TURNS`, `BLUSWAN_REQUEST_TIMEOUT_MS`, … | Server-owned agent tuning (formerly `VITE_BLUSWAN_*`, which no longer has any effect) |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`, `GITHUB_APP_SLUG` (+ optional `GITHUB_APP_WEBHOOK_SECRET`) | GitHub App for the repository workflow; all or none ([docs/GITHUB.md](docs/GITHUB.md)) |
 | `VITE_BLUSWAN_API_URL` | Web build only: the runtime's absolute URL for split-origin deployments (unset = same origin) |
 
 `.env.example` lists every variable by name. The runtime validates its environment at startup and reports every problem at once.
@@ -58,6 +59,12 @@ Same-origin behind one proxy is recommended; split-origin needs `VITE_BLUSWAN_AP
 Liveness is `GET /api/health`, readiness is `GET /api/ready`. Full guide with nginx/Caddy examples, mobile guidance and operating notes: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 When something does not connect: [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) and `npm run doctor`.
 
+## GitHub workflow (optional)
+
+Connect a GitHub App and the whole task lifecycle runs from the UI, desktop or phone: browse repositories, **Clone & Open**, **Create Task Branch**, let BLUSWAN code,
+**Commit**, **Push**, **Create Pull Request**, merge on GitHub, then **Sync Main & Clean Up** and start the next task. GitHub credentials never reach the browser; nothing is merged
+or force-pushed for you. Without GitHub configuration BLUSWAN works exactly as before with local repositories. Setup, minimum permissions and Render notes: [`docs/GITHUB.md`](docs/GITHUB.md).
+
 ## Scripts
 
 | Script | |
@@ -73,7 +80,7 @@ When something does not connect: [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTIN
 | `npm run test:deepseek` · `test:kimi` · `test:openai` · `test:anthropic` | Optional live smoke test per provider (needs credentials) |
 | `npm run eval -- --provider <id>` | Optional live coding evaluation with raw metrics |
 
-More: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) (setup, test matrix, evaluation, dogfooding) · [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) · [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) · [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) · [`docs/PROVIDERS.md`](docs/PROVIDERS.md) · [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`docs/SECURITY.md`](docs/SECURITY.md).
+More: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) (setup, test matrix, evaluation, dogfooding) · [`docs/GITHUB.md`](docs/GITHUB.md) · [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) · [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) · [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) · [`docs/PROVIDERS.md`](docs/PROVIDERS.md) · [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`docs/SECURITY.md`](docs/SECURITY.md).
 
 ## Architecture in one picture
 

@@ -80,3 +80,23 @@ describe('npm run doctor', () => {
     assert.match(out, /BLUSWAN doctor/); assert.match(out, /✕ Cannot reach a runtime/); assert.match(out, /→ /); assert.match(out, /\d+ passed, \d+ warnings, \d+ failed/)
   })
 })
+
+describe('doctor: GitHub', () => {
+  it('skips cleanly when GitHub is not configured and always checks git and the clone root', async () => {
+    const root = tmp(); const r = await runDoctor({ env: { BLUSWAN_PORT: '1', BLUSWAN_WORKSPACE_ROOTS: root }, url: 'http://127.0.0.1:1' })
+    assert.equal(byId(r, 'github').status, 'skip'); assert.equal(byId(r, 'git').status, 'pass'); assert.equal(byId(r, 'clone-root').status, 'pass')
+  })
+  it('validates the key, reaches the API and proves the app credentials — without printing them', async () => {
+    const { startFakeGithub, generateAppKey } = await import('./github/testing/fakeGithub.js')
+    const fake = await startFakeGithub(); cleanups.push(() => fake.close()); const key = generateAppKey()
+    const env = { BLUSWAN_PORT: '1', BLUSWAN_WORKSPACE_ROOTS: tmp(), GITHUB_APP_ID: '7', GITHUB_APP_PRIVATE_KEY: key, GITHUB_APP_CLIENT_ID: 'cid', GITHUB_APP_CLIENT_SECRET: 'csecret-value-123', GITHUB_APP_SLUG: 'bluswan-test', GITHUB_API_URL: fake.url, GITHUB_WEB_URL: fake.url }
+    const r = await runDoctor({ env, url: 'http://127.0.0.1:1' })
+    for (const id of ['github', 'github-api', 'github-credentials']) assert.equal(byId(r, id).status, 'pass', id)
+    assert.doesNotMatch(JSON.stringify(r) + formatDoctor(r), /csecret-value|BEGIN|PRIVATE/)
+    fake.failNext(/^GET \/app$/, 401, { times: 1 })
+    assert.equal(byId(await runDoctor({ env, url: 'http://127.0.0.1:1' }), 'github-credentials').status, 'fail')
+    assert.equal(byId(await runDoctor({ env: { ...env, GITHUB_APP_PRIVATE_KEY: ['-----BEGIN', 'PRIVATE KEY-----\nnot a key\n-----END', 'PRIVATE KEY-----'].join(' ') }, url: 'http://127.0.0.1:1' }), 'github-key').status, 'fail')
+    await fake.close()
+    assert.equal(byId(await runDoctor({ env, url: 'http://127.0.0.1:1' }), 'github-api').status, 'fail')
+  })
+})

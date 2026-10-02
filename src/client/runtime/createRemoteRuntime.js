@@ -35,6 +35,7 @@ export function createRemoteRuntime({
   // auth_error / server_error when the runtime cannot be used.
   let conn = { state: 'starting', failure: null, attempts: 0, nextRetryAt: null, health: null, readiness: null, lastRequestId: null }
   const connListeners = new Set()
+  const githubListeners = new Set() // repository operation progress and GitHub change notices from the stream
   let usable = false // bootstrap (or a cached session list) is loaded: the app can render
   let offlineIndex = false
   let streamAbort = null
@@ -118,6 +119,8 @@ export function createRemoteRuntime({
       if (s.loading) { s.buffered.push(msg.event); return }
       if (!s.hydrated) { touch(s); return } // transcript is loaded when the session is opened
       if (addEvent(s, msg.event)) notify(msg.event, s)
+    } else if (msg.kind === 'operation' || msg.kind === 'github') {
+      for (const fn of [...githubListeners]) { try { fn(msg) } catch { /* a view must not break the stream */ } }
     } else if (msg.kind === 'persistence') {
       const s = sessions.get(msg.sessionId)
       if (s) { s.persistence = msg.status; touch(s) }
@@ -462,6 +465,47 @@ export function createRemoteRuntime({
       return meta ? { ...meta, stdout: '', stderr: '', outputPending: true } : null
     },
 
+    /**
+     * GitHub workflow (server-side). Every call goes through the authenticated runtime; the browser never sees a GitHub
+     * credential. Methods resolve to the server's JSON or throw the normalized error ({code, message, status}).
+     */
+    github: (() => {
+      const e = encodeURIComponent
+      const ws = (id, tail = '') => `/api/workspaces/${e(id)}${tail}`
+      const qs = (o) => { const p = new URLSearchParams(); for (const [k, v] of Object.entries(o ?? {})) if (v !== undefined && v !== null && v !== '') p.set(k, String(v)); const t = p.toString(); return t ? `?${t}` : '' }
+      return {
+        status: () => request('GET', '/api/github/status'),
+        connect: () => request('POST', '/api/github/connect', {}),
+        completeConnection: (body) => request('POST', '/api/github/connect/complete', body),
+        disconnect: () => request('POST', '/api/github/disconnect', {}),
+        repositories: (params) => request('GET', `/api/github/repositories${qs(params)}`),
+        recent: () => request('GET', '/api/github/recent'),
+        repository: (o, r) => request('GET', `/api/github/repositories/${e(o)}/${e(r)}`),
+        async clone(o, r) { const res = await request('POST', `/api/github/repositories/${e(o)}/${e(r)}/clone`, {}); workspaces = [...workspaces.filter(w => w.id !== res.workspace.id), res.workspace]; return res },
+        async open(o, r) { const res = await request('POST', `/api/github/repositories/${e(o)}/${e(r)}/open`, {}); workspaces = [...workspaces.filter(w => w.id !== res.workspace.id), res.workspace]; return res },
+        git: (id) => request('GET', ws(id, '/git')),
+        branches: (id) => request('GET', ws(id, '/branches')),
+        createBranch: (id, body) => request('POST', ws(id, '/branches'), body),
+        suggestBranch: (id, task) => request('GET', ws(id, `/suggest-branch${qs({ task })}`)),
+        checkout: (id, branch) => request('POST', ws(id, '/checkout'), { branch }),
+        sync: (id) => request('POST', ws(id, '/sync'), {}),
+        commits: (id) => request('GET', ws(id, '/commits')),
+        suggestCommit: (id, task) => request('GET', ws(id, `/suggest-commit${qs({ task })}`)),
+        commit: (id, body) => request('POST', ws(id, '/commit'), body),
+        push: (id) => request('POST', ws(id, '/push'), {}),
+        prDraft: (id, body) => request('POST', ws(id, '/pr-draft'), body ?? {}),
+        createPullRequest: (id, body) => request('POST', ws(id, '/pull-requests'), body),
+        pullRequest: (id, branch) => request('GET', ws(id, `/pull-requests/current${qs({ branch })}`)),
+        cleanup: (id, body) => request('POST', ws(id, '/cleanup'), body ?? {}),
+        abandon: (id, body) => request('POST', ws(id, '/abandon'), body ?? {}),
+        removeLocalCopy: (id, body) => request('POST', ws(id, '/remove-local'), body ?? {}),
+        tasks: (id) => request('GET', ws(id, '/tasks')),
+        allTasks: () => request('GET', '/api/github/tasks'),
+        cancelOperation: (opId) => request('POST', `/api/operations/${e(opId)}/cancel`, {}),
+        subscribe(fn) { githubListeners.add(fn); return () => githubListeners.delete(fn) },
+      }
+    })(),
+
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn) },
 
     /** Sign-out: stop the stream, tell the server, drop everything held for this user. */
@@ -469,10 +513,10 @@ export function createRemoteRuntime({
       closed = true; streamAbort?.abort(); attemptAbort?.abort(); for (const wake of [...wakers]) wake()
       await request('POST', '/api/logout', {}).catch(() => {})
       await cache?.clear(userKey).catch(() => {})
-      sessions.clear(); commandOutput.clear(); seen.clear(); listeners.clear(); connListeners.clear(); workspaces = []; providers = []; models = []; usable = false
+      sessions.clear(); commandOutput.clear(); seen.clear(); listeners.clear(); connListeners.clear(); githubListeners.clear(); workspaces = []; providers = []; models = []; usable = false
     },
     /** Stops everything this runtime started: stream, in-flight probes, retry timers and connection listeners. */
-    close() { closed = true; streamAbort?.abort(); attemptAbort?.abort(); for (const wake of [...wakers]) wake(); connListeners.clear(); listeners.clear() },
+    close() { closed = true; streamAbort?.abort(); attemptAbort?.abort(); for (const wake of [...wakers]) wake(); connListeners.clear(); githubListeners.clear(); listeners.clear() },
   }
   return runtime
 }

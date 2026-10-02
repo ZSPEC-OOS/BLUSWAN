@@ -117,12 +117,34 @@ A phone cannot reach `localhost` on your laptop. Use Mode B (or expose Mode A th
 non-local address is built with a `localhost` API URL, BLUSWAN says so on the connection screen ("this device is trying to reach a runtime
 at localhost"). The repositories always live on the runtime host — the phone is only a screen and keyboard.
 
+## GitHub integration and persistent storage (optional)
+
+To browse, clone and open pull requests from the UI, configure a GitHub App ([GITHUB.md](GITHUB.md)). It adds `GITHUB_APP_*` variables to the runtime and
+nothing to the web build. Repositories are cloned under `BLUSWAN_WORKSPACE_ROOTS`, so that location must be **durable**.
+
+**Render example** (the same shape applies to any host with a persistent volume):
+
+```text
+Render web service (Node)            Persistent disk mounted at /var/data
+  start command: npm run server        BLUSWAN_WORKSPACE_ROOTS=/var/data/repos
+  NODE_ENV=production                  BLUSWAN_DATA_DIR=/var/data/bluswan
+  BLUSWAN_HOST=0.0.0.0                 BLUSWAN_PERSISTENCE=file   (or firebase)
+  BLUSWAN_AUTH=firebase  FIREBASE_PROJECT_ID=…
+  provider keys (DEEPSEEK_API_KEY …)   GITHUB_APP_ID / _PRIVATE_KEY / _CLIENT_ID / _CLIENT_SECRET / _SLUG / _WEBHOOK_SECRET
+```
+
+A free-tier service with only `/tmp` is fine for trying BLUSWAN out; clones, unpushed commits and conversations disappear when it restarts or sleeps.
+For production mount a disk (for example at `/var/data`) and point `BLUSWAN_WORKSPACE_ROOTS` and `BLUSWAN_DATA_DIR` at it — any valid path works, nothing is
+hard-coded. Set the GitHub App's callback/setup URL to the web app's origin and the webhook URL to `https://<runtime>/api/github/webhook`. Ensure `git` is
+installed in the image and the runtime user can write to the disk; `npm run doctor` verifies both.
+
 ## What the runtime exposes
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
 | `GET /api/health` | none | Liveness: fast and safe. `{ ok, service: "bluswan", version, protocolVersion, auth }`. No paths, users or secrets. |
 | `GET /api/ready` | none | Readiness: 200 when storage and workspace locations are usable, **503** with a category (`persistence_unavailable`, `workspace_host_unavailable`, `server_not_ready`) otherwise. A missing provider key does **not** make the runtime unready. |
+| `POST /api/github/webhook` | HMAC signature | Optional GitHub App webhooks (only when `GITHUB_APP_WEBHOOK_SECRET` is set). |
 | `GET /api/stream` | bearer | Server-Sent Events: canonical runtime events, `hello` (with `protocolVersion`) and a heartbeat every 15 s. |
 | everything else under `/api` | bearer | Sessions, messages, permissions, workspaces, review. |
 

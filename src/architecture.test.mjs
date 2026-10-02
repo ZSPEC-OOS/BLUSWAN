@@ -175,4 +175,21 @@ describe('release-stabilization guards', () => {
     for (const r of ['health', 'ready', 'stream']) routes.add(r)
     for (const f of browserFiles) for (const m of read(f).matchAll(/['"`]\/api\/([a-z-]+)/g)) assert.ok(routes.has(m[1]), `${rel(f)} calls /api/${m[1]} which the server does not serve`)
   })
+
+  it('GitHub credentials exist only on the server: no GitHub secret names, token patterns or browser storage in browser code', () => {
+    for (const f of browserFiles) {
+      const t = strip(read(f))
+      assert.doesNotMatch(t, /GITHUB_APP_|GITHUB_TOKEN|x-access-token|\bgh[pousr]_[A-Za-z0-9]|extraheader/, rel(f))
+    }
+    for (const f of code.filter(x => rel(x).startsWith(path.join('client', 'github')))) assert.doesNotMatch(strip(read(f)), /localStorage|sessionStorage|indexedDB/, `${rel(f)} must not persist GitHub state in the browser`)
+  })
+  it('git for the GitHub workflow runs only through the hardened runner (argv only, hooks disabled)', () => {
+    for (const f of code.filter(x => top(x) === 'server' && rel(x).includes(`github${path.sep}`))) {
+      const t = strip(read(f))
+      if (rel(f).endsWith('gitRunner.js')) { assert.match(t, /core\.hooksPath=\/dev\/null/); assert.match(t, /protocol\.ext\.allow=never/); continue }
+      assert.doesNotMatch(t, /child_process|execFile|execSync|\bspawn\(|shell:\s*true/, `${rel(f)} must not spawn processes directly`)
+    }
+    const feature = strip(read(path.join(ROOT, 'server', 'github', 'feature.js')))
+    assert.doesNotMatch(feature, /\[[^\]]*['"](--force|-f|--force-with-lease|--hard|--mirror)['"]/, 'the workflow never passes force/hard flags to git')
+  })
 })

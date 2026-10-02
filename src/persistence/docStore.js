@@ -86,6 +86,18 @@ export function createPersistence(docs, { migrate = migrateSession } = {}) {
       return guard(async () => (await docs.get(paths.settings(userId)))?.data ?? null)
     },
 
+    // Feature records owned by one user (GitHub connection, repositories, task workflow): schemaless documents under the user's own path.
+    async putDoc(userId, collection, id, data, { expectedRevision, sortKey = '' } = {}) {
+      return guard(async () => ({ revision: await docs.put(paths.userDoc(userId, collection, id), JSON.parse(JSON.stringify(data)), { expectedRevision, sortKey: sortKey || sortKeyOf(data?.updatedAt ?? Date.now(), id) }) }))
+    },
+    async getDoc(userId, collection, id) {
+      return guard(async () => { const d = await docs.get(paths.userDoc(userId, collection, id)); return d ? { ...d.data, _revision: d.revision } : null })
+    },
+    async listDocs(userId, collection, { limit = 200 } = {}) {
+      return guard(async () => (await docs.list(paths.userDocs(userId, collection), { limit })).items.map(i => ({ ...i.data, _id: i.id, _revision: i.revision })))
+    },
+    async deleteDoc(userId, collection, id) { return guard(() => docs.delete(paths.userDoc(userId, collection, id))) },
+
     /** Cheap health check for readiness: can the backing store be reached/written? Resolves true or throws persistence_unavailable. */
     async probe() { return guard(async () => { await (docs.probe ? docs.probe() : docs.get('system/ready')); return true }) },
     async clearUser(userId) { return guard(() => docs.deleteTree(paths.user(userId))) },

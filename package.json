@@ -18,7 +18,7 @@
     "test:workspace": "node --test \"src/workspace/*.test.mjs\"",
     "test:validation": "node --test \"src/validation/*.test.mjs\" \"src/agent/completion.test.mjs\" \"src/agent/validation.integration.test.mjs\"",
     "test:persistence": "node --test \"src/persistence/*.test.mjs\" \"src/sessions/*.test.mjs\"",
-    "test:server": "node --test \"src/server/*.test.mjs\" \"src/client/runtime/*.test.mjs\"",
+    "test:server": "node --test \"src/server/**/*.test.mjs\" \"src/client/runtime/*.test.mjs\"",
     "test:client": "node --test \"src/client/**/*.test.mjs\"",
     "test:architecture": "node --test \"src/architecture.test.mjs\"",
     "test:eval": "node --test \"src/eval/*.test.mjs\"",
@@ -48,6 +48,6 @@
     "eslint-plugin-react": "7.37.5",
     "eslint-plugin-react-hooks": "7.0.1",
     "globals": "17.4.0",
-    "vite": "7.3.1"
+    "vite": "7.3.6"
   }
 }

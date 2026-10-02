@@ -10,7 +10,7 @@ function relativeTime(ts, now = Date.now()) {
 }
 
 /** One conversation in the sidebar: title, relative time, running indicator, delete with inline confirmation. */
-export default function SessionListItem({ item, active, onSelect, onDelete }) {
+export default function SessionListItem({ item, active, onSelect, onDelete, badge = null }) {
   const [confirming, setConfirming] = useState(false)
   return (
     <li className={`sessions__item${active ? ' is-active' : ''}${item.running ? ' is-running' : ''}`}>
@@ -21,6 +21,7 @@ export default function SessionListItem({ item, active, onSelect, onDelete }) {
           <span>{item.running ? STATUS_LABEL[item.status] : relativeTime(item.lastActivityAt)}</span>
           {item.workspaceName ? <span className="sessions__repo">{item.workspaceName}</span> : null}
         </span>
+        {badge ? <span className="sessions__badge" aria-label={`Pull request: ${badge}`}>{badge}</span> : null}
       </button>
       {confirming ? (
         <span className="sessions__confirm" role="group" aria-label={`Delete ${item.title}?`}>

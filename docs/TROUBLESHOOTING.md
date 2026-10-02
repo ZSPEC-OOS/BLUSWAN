@@ -19,4 +19,14 @@ browser and shows the request id of the last failure.
 | **"Too many conversations / running at once" (429)** | Per-user abuse guard (500 live conversations, 8 concurrent runs). | Delete old conversations or wait for runs to finish. |
 | **Offline banner but the runtime is up** | The page is showing its cached list and has not reconnected yet. | **Try now**; if it stays, open Connection details. |
 
+| **"GitHub integration is unavailable"** | The runtime has no `GITHUB_APP_*` configuration. | Local repositories still work. To enable GitHub follow [GITHUB.md](GITHUB.md); `npm run doctor` shows what is missing. |
+| **"GitHub access expired or was revoked" / `github_auth_expired`** | The installation or app credentials were rejected. | Reconnect GitHub; check the app is still installed and `GITHUB_APP_ID`/`GITHUB_APP_PRIVATE_KEY` match. |
+| **`github_permission_denied` / repository missing from the list** | The app is not installed on that repository, or lacks a permission. | Install it on the repository (*Selected repositories*), grant Contents/Pull requests (read & write), then **Refresh**. |
+| **`github_rate_limited`** | GitHub is throttling the app. | Wait the stated time; avoid repeated refreshes. |
+| **"The working tree has uncommitted changes…"** | A branch change, sync or cleanup would lose work. | Commit the changes (or discard them yourself); BLUSWAN never stashes or resets silently. |
+| **"…rejected the push because it has commits you do not have"** | The remote branch moved. | **Sync**; if it reports divergence resolve it in a terminal or on GitHub. BLUSWAN never force-pushes. |
+| **"Repository remote does not match the connected GitHub repository"** | `origin` was changed on the runtime host. | Restore `origin` yourself (`git remote set-url origin …`); BLUSWAN will not rewrite it. |
+| **Clones disappear after a restart** | `BLUSWAN_WORKSPACE_ROOTS` is on ephemeral storage (for example `/tmp`). | Mount a persistent disk and point `BLUSWAN_WORKSPACE_ROOTS` and `BLUSWAN_DATA_DIR` at it. |
+| **Merged PR not noticed** | No webhook and the tab is hidden. | Press **Refresh Status**, or enable the webhook. |
+
 Reading logs: every request line contains a `requestId`; the same id is returned in the `X-Request-ID` header and shown in Connection details.

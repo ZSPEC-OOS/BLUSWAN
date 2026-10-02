@@ -70,7 +70,8 @@ describe('pure helpers', () => {
     assert.doesNotThrow(() => validateOwnerRepo('acme', 'my.repo_name-1'))
   })
   it('redacts tokens, authenticated URLs, authorization headers and private keys', () => {
-    const text = 'ghp_abcdefghijklmnopqrstuvwxyz0123 ghs_abcdefghijklmnopqrstuvwxyz0123 github_pat_11AAAAAAAAAAAAAAAAAAAA_bbbbbbbbbbbbbbbbbbbbbbbb https://x-access-token:ghs_secretsecretsecret1234@github.com/o/r.git Authorization: Basic eC1hY2Nlc3MtdG9rZW46c2VjcmV0 http.https://github.com/.extraheader=AUTHORIZATION: basic abc123abc123 -----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----'
+    const pem = ['-----BEGIN RSA', 'PRIVATE KEY-----\nMIIabc\n-----END RSA', 'PRIVATE KEY-----'].join(' ')
+    const text = [['gh', 'p_abcdefghijklmnopqrstuvwxyz0123'].join(''), ['gh', 's_abcdefghijklmnopqrstuvwxyz0123'].join(''), ['github', '_pat_11AAAAAAAAAAAAAAAAAAAA_bbbbbbbbbbbbbbbbbbbbbbbb'].join(''), 'https://x-access-token:' + ['gh', 's_secretsecretsecret1234'].join('') + '@github.com/o/r.git', 'Authorization: Basic eC1hY2Nlc3MtdG9rZW46c2VjcmV0', 'http.https://github.com/.extraheader=AUTHORIZATION: basic abc123abc123 ' + pem].join(' ')
     const out = redactGithub(text)
     for (const leak of ['ghp_abc', 'ghs_abc', 'github_pat_11', 'ghs_secret', 'eC1hY2Nlc3Mt', 'abc123abc123', 'MIIabc']) assert.doesNotMatch(out, new RegExp(leak), leak)
   })

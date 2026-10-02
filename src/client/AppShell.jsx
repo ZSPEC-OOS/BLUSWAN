@@ -12,6 +12,10 @@ import WorkspacePanel from './workspace/WorkspacePanel.jsx'
 import ResizablePanel from './shared/ResizablePanel.jsx'
 import MobileSheet from './shared/MobileSheet.jsx'
 import { ActivityLinksContext } from './activity/ActivityLinks.js'
+import { GithubProvider, useGithub } from './github/GithubContext.js'
+import GithubPanel from './github/GithubPanel.jsx'
+import GithubDialogs from './github/GithubDialogs.jsx'
+import WorkflowBar from './github/WorkflowBar.jsx'
 import { useMediaQuery } from './shared/useMediaQuery.js'
 import { MIN_WIDTH, MAX_WIDTH } from './workspace/workspaceStore.js'
 import './theme.css'
@@ -20,6 +24,7 @@ import './shell.css'
 
 export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = '' }) {
   const { snapshot, store } = useBluswan()
+  const { store: gh } = useGithub()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [diagOpen, setDiagOpen] = useState(false)
@@ -53,6 +58,10 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = 
     return () => { window.removeEventListener('focus', onFocus); document.removeEventListener('visibilitychange', onFocus) }
   }, [store])
 
+  // the repository workflow re-reads git when the repository, connectivity or the agent's run state changes
+  const wsId = snapshot.active?.workspace?.id ?? null
+  const runBusy = !!snapshot.active?.composer?.busy
+  useEffect(() => { gh?.notifyContextChanged() }, [gh, wsId, snapshot.canAct, runBusy, snapshot.activeId])
   const select = useCallback((id) => { store.selectSession(id); setSidebarOpen(false) }, [store])
   const send = useCallback((text) => store.sendMessage(text).ok, [store])
   const closeSettings = useCallback(() => setSettingsOpen(false), [])
@@ -84,7 +93,7 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = 
     <div className="shell">
       <SessionSidebar
         sessions={snapshot.sessions} activeId={snapshot.activeId} open={sidebarOpen} onClose={() => setSidebarOpen(false)}
-        onNew={() => { store.newSession(); setSidebarOpen(false) }} onSelect={select} onDelete={(id, opts) => store.deleteSession(id, opts)}
+        onNew={() => { store.newSession(); setSidebarOpen(false) }} onRepositories={gh ? () => { gh.openPanel('home'); setSidebarOpen(false) } : undefined} onSelect={select} onDelete={(id, opts) => store.deleteSession(id, opts)}
       />
       <div className="shell__main">
         <ConnectionBanner connection={snapshot.connection} onRetry={store.retryConnection} onSignIn={onLogout} onDetails={() => setDiagOpen(v => !v)} />
@@ -94,6 +103,14 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = 
           permissionMode={snapshot.permissionMode} onPermissionMode={store.setPermissionMode}
           onOpenSettings={() => setSettingsOpen(true)} onToggleSidebar={() => setSidebarOpen(o => !o)} onToggleChanges={toggleChanges} panelOpen={panelOpen} models={snapshot.models} onChooseModel={store.chooseModel}
         />
+        {gh ? <WorkflowBar busy={runBusy} offline={!snapshot.canAct} onReviewDiff={toggleChanges} /> : null}
+        {gh && !snapshot.active?.workspace ? (
+          <div className="conversation__banner gh-empty" role="status">
+            <span>Choose a repository to start coding.</span>
+            <button type="button" className="btn btn--primary" onClick={() => gh.openPanel('home')}>Browse GitHub</button>
+            <button type="button" className="btn" onClick={() => setSettingsOpen(true)}>Open Local Repository</button>
+          </div>
+        ) : null}
         <ConversationView
           active={snapshot.active} notice={snapshot.notice} setup={snapshot.setup} canOpenWorkspaces={snapshot.canOpenWorkspaces}
           onSend={send} onStop={store.cancel} onApprove={store.approvePermission} onDeny={store.denyPermission}
@@ -110,6 +127,7 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = 
           <WorkspacePanel review={review} actions={store.workspace} stacked />
         </MobileSheet>
       ) : null}
+      {gh ? <><GithubPanel onOpenLocal={() => setSettingsOpen(true)} /><GithubDialogs /></> : null}
       {settingsOpen ? (
         <SettingsPanel
           settings={settings.get()} providers={snapshot.providerStatus} onSave={(patch) => { settings.update(patch); store.saveSettings(patch) }} permissionMode={snapshot.permissionMode} onPermissionMode={store.setPermissionMode}
@@ -122,10 +140,12 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = 
   )
 }
 
-export default function AppShell({ store, settings, userEmail, onLogout, mobileOverride, apiUrl = '' }) {
+export default function AppShell({ store, settings, userEmail, onLogout, mobileOverride, apiUrl = '', github = null }) {
   return (
     <ClientStoreProvider store={store}>
-      <Shell settings={settings} userEmail={userEmail} onLogout={onLogout} mobileOverride={mobileOverride} apiUrl={apiUrl} />
+      <GithubProvider store={github}>
+        <Shell settings={settings} userEmail={userEmail} onLogout={onLogout} mobileOverride={mobileOverride} apiUrl={apiUrl} />
+      </GithubProvider>
     </ClientStoreProvider>
   )
 }

@@ -19,7 +19,7 @@ const log = createLogger('github')
 const MAX_HISTORY = 60
 
 export function createGithubFeature({
-  ctxOf, persistence, settings, secrets = {}, api, webApi = api, appAuth, openWorkspace, roots, hostId, activeContexts = async () => [],
+  ctxOf, persistence, settings, secrets = {}, api, webApi = api, appAuth, openWorkspace, roots, activeContexts = async () => [],
   cloneUrlOk, identity = { name: 'BLUSWAN', email: 'bluswan@users.noreply.github.com' }, now = () => Date.now(), listCacheMs = 60_000,
 }) {
   const configured = !!settings?.configured
@@ -265,6 +265,7 @@ export function createGithubFeature({
   async function readState(ws, doc) {
     const out = await G(ws, ['status', '--porcelain=v2', '--branch', '--untracked-files=all', '-z'])
     const s = parseStatusV2(out.stdout)
+    s.files = s.files.map(f => ({ ...f, sensitive: isSensitivePath(f.path) }))
     s.defaultBranch = doc?.defaultBranch ?? null
     s.isDefault = !!doc && !s.detached && s.branch === doc.defaultBranch
     return s

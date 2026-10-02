@@ -342,7 +342,7 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
   }
   const rootsForClones = allowedRoots?.length ? allowedRoots : [os.homedir()]
   service.github = createGithubFeature({
-    ctxOf, persistence, hostId, roots: rootsForClones, settings: githubOptions?.settings ?? { configured: false }, secrets: githubOptions?.secrets ?? {},
+    ctxOf, persistence, roots: rootsForClones, settings: githubOptions?.settings ?? { configured: false }, secrets: githubOptions?.secrets ?? {},
     api: githubOptions?.api, webApi: githubOptions?.webApi ?? githubOptions?.api, appAuth: githubOptions?.appAuth, cloneUrlOk: githubOptions?.cloneUrlOk ?? (() => false),
     openWorkspace: async (user, root) => service.openWorkspace(user, { root }),
     activeContexts: async () => (await Promise.all([...contexts.values()].map(p => p.catch(() => null)))).filter(Boolean),

@@ -1,50 +1,21 @@
 #!/usr/bin/env node
 // BLUSWAN server: runtime, provider credentials, persistence and the HTTP/SSE API. The browser talks only to this.
-import http from 'node:http'
-import os from 'node:os'
-import path from 'node:path'
-import { createBluswanService } from '../src/server/service.js'
-import { createHttpHandler } from '../src/server/http.js'
-import { createNoAuth, createFirebaseVerifier } from '../src/server/auth.js'
-import { createEnvCredentialStore } from '../src/providers/credentials/serverCredentialStore.js'
-import { createFilePersistence } from '../src/persistence/adapters/filePersistence.js'
-import { createMemoryPersistence } from '../src/persistence/adapters/memoryPersistence.js'
-import { loadRuntimeConfig } from '../src/config/runtimeConfig.js'
+import { startServer, ConfigError } from '../src/server/main.js'
 
-const env = process.env
-const port = Number(env.BLUSWAN_PORT) || 8787
-const authMode = env.BLUSWAN_AUTH || 'none'
-const host = env.BLUSWAN_HOST || '127.0.0.1'
-const loopback = ['127.0.0.1', '::1', 'localhost'].includes(host)
-
-if (authMode === 'none' && !loopback) {
-  console.error('Refusing to listen on a non-loopback address with BLUSWAN_AUTH=none (anyone who can reach it could run commands). Use BLUSWAN_AUTH=firebase.')
+let running
+try {
+  running = await startServer({ print: (l) => console.log(l), logRequests: process.env.BLUSWAN_LOG_REQUESTS !== '0' })
+} catch (e) {
+  console.error(e instanceof ConfigError ? e.message : `BLUSWAN could not start: ${e?.message ?? e}`)
   process.exit(1)
 }
-const production = env.NODE_ENV === 'production'
-if (production && authMode === 'none' && env.BLUSWAN_ALLOW_NO_AUTH !== '1') {
-  console.error('Refusing to start in production without authentication. Set BLUSWAN_AUTH=firebase (or BLUSWAN_ALLOW_NO_AUTH=1 to accept the risk on a private host).')
-  process.exit(1)
+let stopping = false
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    if (stopping) process.exit(1) // a second signal forces exit
+    stopping = true
+    console.log(`${sig} received: finishing up…`)
+    const force = setTimeout(() => process.exit(1), 12_000); force.unref()
+    running.close(sig).then(() => { console.log('BLUSWAN stopped.'); process.exit(0) }, () => process.exit(1))
+  })
 }
-const auth = authMode === 'firebase' ? createFirebaseVerifier({ projectId: env.FIREBASE_PROJECT_ID }) : createNoAuth()
-
-const persistenceKind = env.BLUSWAN_PERSISTENCE || 'file'
-let persistence
-if (persistenceKind === 'memory') persistence = createMemoryPersistence()
-else if (persistenceKind === 'firebase') {
-  const { createFirebasePersistence } = await import('../src/persistence/adapters/firebasePersistence.js')
-  const { initializeApp, applicationDefault } = await import('firebase-admin/app').catch(() => { throw new Error('BLUSWAN_PERSISTENCE=firebase needs the firebase-admin package (npm install firebase-admin).') })
-  const { getFirestore } = await import('firebase-admin/firestore')
-  persistence = createFirebasePersistence({ db: getFirestore(initializeApp({ credential: applicationDefault(), projectId: env.FIREBASE_PROJECT_ID })) })
-} else persistence = createFilePersistence({ dir: path.resolve(env.BLUSWAN_DATA_DIR || '.bluswan/data') })
-
-const roots = (env.BLUSWAN_WORKSPACE_ROOTS || '').split(path.delimiter).filter(Boolean)
-if ((authMode !== 'none' || production) && !roots.length) { console.error('BLUSWAN_WORKSPACE_ROOTS is required when authentication is enabled or NODE_ENV=production.'); process.exit(1) }
-
-const service = createBluswanService({
-  persistence, credentials: createEnvCredentialStore(env), hostId: env.BLUSWAN_HOST_ID || os.hostname(),
-  allowedRoots: roots.length ? roots : [os.homedir()], config: loadRuntimeConfig(env),
-})
-const server = http.createServer(createHttpHandler({ service, auth, corsOrigin: env.BLUSWAN_CORS_ORIGIN || null }))
-server.listen(port, host, () => console.log(`BLUSWAN server on http://${host}:${port} (auth: ${authMode}, persistence: ${persistenceKind})`))
-for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, async () => { server.close(); process.exit(0) })

@@ -453,7 +453,7 @@ describe('WorkspaceManager', () => {
 describe('runtime limits config', () => {
   it('provides defaults and env overrides', () => {
     assert.deepEqual({ ...loadRuntimeConfig({}).limits }, { ...DEFAULT_LIMITS })
-    const c = loadRuntimeConfig({ VITE_BLUSWAN_LIMIT_MAX_GREP_RESULTS: '7', VITE_BLUSWAN_LIMIT_MAX_SHELL_TIMEOUT_MS: 'junk' })
+    const c = loadRuntimeConfig({ BLUSWAN_LIMIT_MAX_GREP_RESULTS: '7', BLUSWAN_LIMIT_MAX_SHELL_TIMEOUT_MS: 'junk' })
     assert.equal(c.limits.maxGrepResults, 7)
     assert.equal(c.limits.maxShellTimeoutMs, DEFAULT_LIMITS.maxShellTimeoutMs)
     for (const k of ['maxReadBytes', 'maxReadManyFiles', 'maxReadManyBytes', 'maxGrepResults', 'maxShellOutputBytes', 'maxDiffBytes', 'defaultShellTimeoutMs', 'maxShellTimeoutMs', 'maxDirectoryDepth']) {

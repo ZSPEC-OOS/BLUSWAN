@@ -16,7 +16,7 @@ const DEFAULTS = Object.freeze({
   devLogging: false,
 })
 
-/** Workspace/tool limits. Override per key with VITE_BLUSWAN_LIMIT_<SNAKE_CASE_NAME>. */
+/** Workspace/tool limits. Override per key with BLUSWAN_LIMIT_<SNAKE_CASE_NAME>. */
 export const DEFAULT_LIMITS = Object.freeze({
   maxReadBytes: 64_000,
   maxFileBytes: 10_000_000,
@@ -39,7 +39,7 @@ export const DEFAULT_LIMITS = Object.freeze({
 })
 
 /**
- * Context-engine settings. Override per key with VITE_BLUSWAN_<SNAKE_CASE_NAME>
+ * Context-engine settings. Override per key with BLUSWAN_<SNAKE_CASE_NAME>
  * (ratios as decimals, summarizeWithModel as "true").
  */
 export const DEFAULT_CONTEXT = Object.freeze({
@@ -58,7 +58,7 @@ export const DEFAULT_CONTEXT = Object.freeze({
   summarizeWithModel: false, // optional model-assisted summary of folded history (never required)
 })
 
-/** Validation/recovery settings. Override per key with VITE_BLUSWAN_<SNAKE_CASE_NAME> (booleans as "true"/"false"). */
+/** Validation/recovery settings. Override per key with BLUSWAN_<SNAKE_CASE_NAME> (booleans as "true"/"false"). */
 export const DEFAULT_VALIDATION = Object.freeze({
   enableAutomaticValidation: true, // behavior setting: run project checks before accepting completion
   enableBroadValidation: true, // allow broad tests / build in addition to focused checks
@@ -94,40 +94,40 @@ function nonNegInt(value, fallback) {
 export function loadRuntimeConfig(env = readEnv()) {
   const context = {}
   for (const [key, fallback] of Object.entries(DEFAULT_CONTEXT)) {
-    const raw = env[`VITE_BLUSWAN_${key.replace(/[A-Z]/g, c => `_${c}`).toUpperCase()}`]
+    const raw = env[`BLUSWAN_${key.replace(/[A-Z]/g, c => `_${c}`).toUpperCase()}`]
     if (typeof fallback === 'boolean') context[key] = raw === undefined ? fallback : raw === 'true'
     else if (Number.isInteger(fallback)) context[key] = nonNegInt(raw, fallback)
     else { const f = Number.parseFloat(raw); context[key] = Number.isFinite(f) && f > 0 && f <= 1 ? f : fallback }
   }
   const validation = {}
   for (const [key, fallback] of Object.entries(DEFAULT_VALIDATION)) {
-    const raw = env[`VITE_BLUSWAN_${key.replace(/[A-Z]/g, c => `_${c}`).toUpperCase()}`]
+    const raw = env[`BLUSWAN_${key.replace(/[A-Z]/g, c => `_${c}`).toUpperCase()}`]
     validation[key] = typeof fallback === 'boolean' ? (raw === undefined ? fallback : raw !== 'false') : nonNegInt(raw, fallback)
   }
   const limits = {}
   for (const [key, fallback] of Object.entries(DEFAULT_LIMITS)) {
-    const envKey = `VITE_BLUSWAN_LIMIT_${key.replace(/[A-Z]/g, c => `_${c}`).toUpperCase()}`
+    const envKey = `BLUSWAN_LIMIT_${key.replace(/[A-Z]/g, c => `_${c}`).toUpperCase()}`
     limits[key] = int(env[envKey], fallback)
   }
   const deepseekModel = env.DEEPSEEK_MODEL || ''
   return Object.freeze({
-    defaultProvider: env.VITE_BLUSWAN_PROVIDER || DEFAULTS.defaultProvider,
-    defaultModel: env.VITE_BLUSWAN_MODEL || deepseekModel,
-    maxTurns: int(env.VITE_BLUSWAN_MAX_TURNS, DEFAULTS.maxTurns),
-    permissionMode: ['ask', 'auto_edit', 'full_auto'].includes(env.VITE_BLUSWAN_PERMISSION_MODE) ? env.VITE_BLUSWAN_PERMISSION_MODE : 'auto_edit',
-    requestTimeoutMs: int(env.VITE_BLUSWAN_REQUEST_TIMEOUT_MS, DEFAULTS.requestTimeoutMs),
-    streamTimeoutMs: int(env.VITE_BLUSWAN_STREAM_TIMEOUT_MS, DEFAULTS.streamTimeoutMs),
-    maxOutputTokens: int(env.VITE_BLUSWAN_MAX_OUTPUT_TOKENS, DEFAULTS.maxOutputTokens),
-    maxTransportRetries: nonNegInt(env.VITE_BLUSWAN_MAX_TRANSPORT_RETRIES, DEFAULTS.maxTransportRetries),
-    retryBaseDelayMs: nonNegInt(env.VITE_BLUSWAN_RETRY_BASE_DELAY_MS, DEFAULTS.retryBaseDelayMs),
-    retryMaxDelayMs: int(env.VITE_BLUSWAN_RETRY_MAX_DELAY_MS, DEFAULTS.retryMaxDelayMs),
-    maxIdenticalToolCalls: int(env.VITE_BLUSWAN_MAX_IDENTICAL_TOOL_CALLS, DEFAULTS.maxIdenticalToolCalls),
-    maxFailedTurns: int(env.VITE_BLUSWAN_MAX_FAILED_TURNS, DEFAULTS.maxFailedTurns),
+    defaultProvider: env.BLUSWAN_PROVIDER || DEFAULTS.defaultProvider,
+    defaultModel: env.BLUSWAN_MODEL || deepseekModel,
+    maxTurns: int(env.BLUSWAN_MAX_TURNS, DEFAULTS.maxTurns),
+    permissionMode: ['ask', 'auto_edit', 'full_auto'].includes(env.BLUSWAN_PERMISSION_MODE) ? env.BLUSWAN_PERMISSION_MODE : 'auto_edit',
+    requestTimeoutMs: int(env.BLUSWAN_REQUEST_TIMEOUT_MS, DEFAULTS.requestTimeoutMs),
+    streamTimeoutMs: int(env.BLUSWAN_STREAM_TIMEOUT_MS, DEFAULTS.streamTimeoutMs),
+    maxOutputTokens: int(env.BLUSWAN_MAX_OUTPUT_TOKENS, DEFAULTS.maxOutputTokens),
+    maxTransportRetries: nonNegInt(env.BLUSWAN_MAX_TRANSPORT_RETRIES, DEFAULTS.maxTransportRetries),
+    retryBaseDelayMs: nonNegInt(env.BLUSWAN_RETRY_BASE_DELAY_MS, DEFAULTS.retryBaseDelayMs),
+    retryMaxDelayMs: int(env.BLUSWAN_RETRY_MAX_DELAY_MS, DEFAULTS.retryMaxDelayMs),
+    maxIdenticalToolCalls: int(env.BLUSWAN_MAX_IDENTICAL_TOOL_CALLS, DEFAULTS.maxIdenticalToolCalls),
+    maxFailedTurns: int(env.BLUSWAN_MAX_FAILED_TURNS, DEFAULTS.maxFailedTurns),
     temperature: DEFAULTS.temperature,
     limits: Object.freeze(limits),
     ...context,
     ...validation,
-    devLogging: env.VITE_BLUSWAN_DEV_LOGGING === 'true' || !!env.DEV,
+    devLogging: env.BLUSWAN_DEV_LOGGING === 'true' || !!env.DEV,
     providers: Object.freeze({
       kimi: Object.freeze({ apiKey: env.KIMI_API_KEY || '', baseUrl: env.KIMI_BASE_URL || 'https://api.moonshot.ai/v1', model: env.KIMI_MODEL || '' }),
       openai: Object.freeze({ apiKey: env.OPENAI_API_KEY || '', baseUrl: env.OPENAI_BASE_URL || 'https://api.openai.com/v1', model: env.OPENAI_MODEL || '' }),

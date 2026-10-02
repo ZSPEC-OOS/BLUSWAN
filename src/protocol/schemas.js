@@ -51,6 +51,13 @@ export const ERROR_CODES = Object.freeze([
   'context_invalid_history',
   'context_limit',
   'unsupported_feature',
+  'server_unavailable',
+  'server_not_ready',
+  'protocol_mismatch',
+  'workspace_host_unavailable',
+  'stream_disconnected',
+  'payload_too_large',
+  'too_many_requests',
 ])
 
 export function newId() {

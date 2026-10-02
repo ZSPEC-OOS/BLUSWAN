@@ -5,10 +5,12 @@ import { bearerToken } from './auth.js'
 import { isBluswanError, createError } from '../protocol/schemas.js'
 import { redactSecrets } from '../utils/redact.js'
 import { createLogger } from '../utils/logger.js'
+import { randomUUID } from 'node:crypto'
+import { APP_VERSION, PROTOCOL_VERSION, SERVICE_NAME } from '../protocol/version.js'
 
 const log = createLogger('http')
 const MAX_BODY = 1_000_000
-const STATUS = { unauthenticated: 401, forbidden: 403, not_found: 404, workspace_not_found: 404, persistence_not_found: 404, invalid_request: 400, session_busy: 409, persistence_conflict: 409, nothing_to_revert: 409, revert_unsupported: 422, revert_failed: 500, configuration_error: 503, persistence_invalid_record: 422, persistence_schema_unsupported: 422, persistence_unavailable: 503 }
+const STATUS = { unauthenticated: 401, forbidden: 403, not_found: 404, workspace_not_found: 404, persistence_not_found: 404, invalid_request: 400, session_busy: 409, persistence_conflict: 409, nothing_to_revert: 409, revert_unsupported: 422, revert_failed: 500, configuration_error: 503, persistence_invalid_record: 422, persistence_schema_unsupported: 422, persistence_unavailable: 503, server_not_ready: 503, server_unavailable: 503, workspace_host_unavailable: 503, payload_too_large: 413, too_many_requests: 429, protocol_mismatch: 426 }
 
 const send = (res, status, body, headers = {}) => {
   const text = JSON.stringify(body)
@@ -16,14 +18,20 @@ const send = (res, status, body, headers = {}) => {
   res.end(text)
 }
 
-async function readJson(req) {
+async function readJson(req, maxBody = MAX_BODY) {
   let size = 0
+  let tooLarge = false
   const chunks = []
   for await (const c of req) {
     size += c.length
-    if (size > MAX_BODY) throw createError({ code: 'invalid_request', message: 'Request body is too large.' })
+    if (size > maxBody) { // keep draining (without storing) so the client receives the 413 instead of a reset, up to a hard cap
+      tooLarge = true
+      if (size > maxBody * 8) { req.destroy(); break }
+      continue
+    }
     chunks.push(c)
   }
+  if (tooLarge) throw createError({ code: 'payload_too_large', message: 'Request body is too large.' })
   if (!chunks.length) return {}
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { throw createError({ code: 'invalid_request', message: 'Request body must be JSON.' }) }
 }
@@ -35,20 +43,33 @@ export function errorBody(e) {
   return { status: 500, body: { error: { code: 'runtime_error', message: 'Something went wrong on the server.', retryable: false } } }
 }
 
+const CONTENT_TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.woff': 'font/woff', '.map': 'application/json; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.webmanifest': 'application/manifest+json' }
+
 /**
  * @param {{service:object, auth:{verify:(token:string|null)=>Promise<{id:string,email:string|null}>}, corsOrigin?:string|null,
- *          heartbeatMs?:number}} deps
- * @returns {(req, res) => void} request listener
+ *          heartbeatMs?:number, maxBodyBytes?:number, sseMaxMs?:number, staticDir?:string|null, logRequests?:boolean, logger?:object}} deps
+ * @returns {((req, res) => void) & {drain:()=>void, closeStreams:()=>void}} request listener
  */
-export function createHttpHandler({ service, auth, corsOrigin = null, heartbeatMs = 15_000 }) {
-  const cors = corsOrigin ? { 'Access-Control-Allow-Origin': corsOrigin, 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS', Vary: 'Origin' } : {}
+export function createHttpHandler({ service, auth, corsOrigin = null, heartbeatMs = 15_000, maxBodyBytes = MAX_BODY, sseMaxMs = 6 * 3600_000, staticDir = null, logRequests = false, logger = log }) {
+  const maxBody = maxBodyBytes
+  const authName = auth.mode === 'firebase' ? 'firebase' : 'none'
+  const streams = new Set()
+  let draining = false
+  // CORS is granted to exactly one configured origin, and only when the request really comes from it.
+  const corsFor = (req) => (corsOrigin && req.headers.origin === corsOrigin
+    ? { 'Access-Control-Allow-Origin': corsOrigin, 'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Request-ID', 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS', 'Access-Control-Expose-Headers': 'X-Request-ID', 'Access-Control-Max-Age': '600', Vary: 'Origin' }
+    : (corsOrigin ? { Vary: 'Origin' } : {}))
+  const requestId = (req) => {
+    const given = req.headers['x-request-id']
+    return typeof given === 'string' && /^[A-Za-z0-9_.-]{8,64}$/.test(given) ? given : randomUUID()
+  }
 
-  async function route(req, res, url, user) {
+  async function route(req, res, url, user, hdr) {
     const m = req.method
     const seg = url.pathname.replace(/^\/api\/?/, '').split('/').filter(Boolean).map(decodeURIComponent)
     const q = url.searchParams
-    const body = m === 'GET' || m === 'DELETE' ? {} : await readJson(req)
-    const ok = (data, status = 200) => send(res, status, data, cors)
+    const body = m === 'GET' || m === 'DELETE' ? {} : await readJson(req, maxBody)
+    const ok = (data, status = 200) => send(res, status, data, hdr)
 
     if (seg[0] === 'me' && m === 'GET') return ok({ user })
     if (seg[0] === 'bootstrap' && m === 'GET') return ok(await service.bootstrap(user))
@@ -88,29 +109,85 @@ export function createHttpHandler({ service, auth, corsOrigin = null, heartbeatM
     throw createError({ code: 'not_found', message: 'Unknown endpoint.' })
   }
 
-  async function stream(req, res, user) {
-    res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no', ...cors })
-    const write = (msg) => res.write(`id: ${msg.event?.id ?? ''}\ndata: ${JSON.stringify(msg)}\n\n`)
-    write({ kind: 'hello', at: Date.now() })
+  async function stream(req, res, user, hdr) {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no', ...hdr })
+    const write = (msg) => { if (!res.writableEnded && !res.destroyed) res.write(`id: ${msg.event?.id ?? ''}\ndata: ${JSON.stringify(msg)}\n\n`) }
+    write({ kind: 'hello', at: Date.now(), protocolVersion: PROTOCOL_VERSION })
     const unsubscribe = await service.subscribe(user, write)
-    const beat = setInterval(() => res.write(': keep-alive\n\n'), heartbeatMs)
-    const close = () => { clearInterval(beat); unsubscribe() }
-    req.on('close', close); res.on('error', close)
+    const beat = setInterval(() => { if (!res.writableEnded && !res.destroyed) res.write(': keep-alive\n\n') }, heartbeatMs)
+    const lifetime = sseMaxMs > 0 ? setTimeout(() => close(true), sseMaxMs) : null // the client reconnects and resyncs
+    let closed = false
+    const handle = { end: () => close(true) }
+    function close(end = false) {
+      if (closed) return
+      closed = true; clearInterval(beat); clearTimeout(lifetime); unsubscribe(); streams.delete(handle)
+      if (end && !res.writableEnded) res.end()
+    }
+    streams.add(handle)
+    req.on('close', () => close()); res.on('error', () => close()); res.on('close', () => close())
   }
 
-  return async function handler(req, res) {
+  async function serveStatic(req, res, url, hdr) {
+    const fsp = await import('node:fs/promises'); const pathMod = await import('node:path')
+    const root = pathMod.resolve(staticDir)
+    let rel = decodeURIComponent(url.pathname)
+    let abs = pathMod.resolve(root, '.' + pathMod.posix.normalize('/' + rel))
+    if (abs !== root && !abs.startsWith(root + pathMod.sep)) return send(res, 404, { error: { code: 'not_found', message: 'Not found.' } }, hdr)
+    let st = await fsp.stat(abs).catch(() => null)
+    if (st?.isDirectory()) { abs = pathMod.join(abs, 'index.html'); st = await fsp.stat(abs).catch(() => null) }
+    const asset = !!st?.isFile()
+    if (!asset) { // single-page app: unknown non-file paths load the app, which does its own routing
+      if (pathMod.extname(rel)) return send(res, 404, { error: { code: 'not_found', message: 'Not found.' } }, hdr)
+      abs = pathMod.join(root, 'index.html')
+    }
+    const body = await fsp.readFile(abs).catch(() => null)
+    if (!body) return send(res, 404, { error: { code: 'not_found', message: 'Not found.' } }, hdr)
+    const type = CONTENT_TYPES[pathMod.extname(abs)] ?? 'application/octet-stream'
+    const immutable = /[\\/]assets[\\/].+-[A-Za-z0-9_-]{6,}\./.test(abs)
+    res.writeHead(200, { 'Content-Type': type, 'Content-Length': body.length, 'Cache-Control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache', 'X-Content-Type-Options': 'nosniff', 'X-Request-ID': hdr['X-Request-ID'] })
+    res.end(req.method === 'HEAD' ? undefined : body)
+  }
+
+  async function handler(req, res) {
+    const started = Date.now()
+    const id = requestId(req)
+    const hdr = { 'X-Request-ID': id, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', ...corsFor(req) }
+    let url = null
+    let userId = null
+    res.on('finish', () => {
+      if (!logRequests) return
+      // one line per request: no query string, no body, no headers, no tokens
+      logger.info('request', { method: req.method, path: url?.pathname?.startsWith('/api/') ? url.pathname.replace(/\/sessions\/[^/]+/, '/sessions/:id') : '(static)', status: res.statusCode, ms: Date.now() - started, requestId: id, ...(userId ? { user: userId.slice(0, 8) } : {}) })
+    })
     try {
-      if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end() }
-      const url = new URL(req.url, 'http://localhost')
-      if (!url.pathname.startsWith('/api/')) return send(res, 404, { error: { code: 'not_found', message: 'Not found.' } }, cors)
-      if (url.pathname === '/api/health') return send(res, 200, { ok: true, auth: auth.mode === 'firebase' ? 'firebase' : 'none' }, cors)
+      if (req.method === 'OPTIONS') { res.writeHead(204, hdr); return res.end() }
+      url = new URL(req.url, 'http://localhost')
+      if (!url.pathname.startsWith('/api/')) {
+        if (staticDir && (req.method === 'GET' || req.method === 'HEAD')) return await serveStatic(req, res, url, hdr)
+        return send(res, 404, { error: { code: 'not_found', message: 'Not found.' } }, hdr)
+      }
+      // liveness: fast, unauthenticated, reveals nothing but the service identity and versions
+      if (url.pathname === '/api/health') return send(res, 200, { ok: true, service: SERVICE_NAME, version: APP_VERSION, protocolVersion: PROTOCOL_VERSION, auth: authName }, hdr)
+      // readiness: can the runtime do work? 503 when storage or workspaces are unusable. Categories only.
+      if (url.pathname === '/api/ready') {
+        const r = draining ? { ready: false, code: 'server_not_ready', message: 'BLUSWAN is shutting down.', checks: {} } : await service.ready()
+        return send(res, r.ready ? 200 : 503, r.ready
+          ? { ok: true, ready: true, service: SERVICE_NAME, version: APP_VERSION, protocolVersion: PROTOCOL_VERSION, auth: authName, checks: r.checks, providers: r.providers }
+          : { ok: false, ready: false, service: SERVICE_NAME, version: APP_VERSION, protocolVersion: PROTOCOL_VERSION, auth: authName, checks: r.checks, providers: r.providers, error: { code: r.code, message: r.message, retryable: true } }, hdr)
+      }
+      if (draining) throw createError({ code: 'server_not_ready', message: 'BLUSWAN is shutting down.', retryable: true })
       const user = await auth.verify(bearerToken(req))
-      if (url.pathname === '/api/stream' && req.method === 'GET') return await stream(req, res, user)
-      return await route(req, res, url, user)
+      userId = user.id
+      if (url.pathname === '/api/stream' && req.method === 'GET') return await stream(req, res, user, hdr)
+      return await route(req, res, url, user, hdr)
     } catch (e) {
       if (res.headersSent) { res.end(); return }
       const { status, body } = errorBody(e)
-      send(res, status, body, cors)
+      send(res, status, { error: { ...body.error, requestId: id } }, hdr)
     }
   }
+  handler.drain = () => { draining = true }
+  handler.closeStreams = () => { for (const s of [...streams]) s.end() }
+  handler.streamCount = () => streams.size
+  return handler
 }

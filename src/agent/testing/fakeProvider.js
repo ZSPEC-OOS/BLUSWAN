@@ -20,14 +20,14 @@ export function reply(...parts) {
  * async function `(request, n, emit)` that may stream via `emit` and wait; return remaining events); exhausting it throws. `failures`: errors thrown by the first requests
  * (before any event) — for retry tests. `hang`: never resolves unless the signal aborts.
  */
-export function createFakeProvider({ id = 'fake', script = [], turns = null, failWith = null, hang = false, failures = [], validate } = {}) {
+export function createFakeProvider({ id = 'fake', script = [], turns = null, failWith = null, hang = false, failures = [], validate, capabilities = {}, respond = null } = {}) {
   const requests = []
   const pendingFailures = [...failures]
   let served = 0
   return {
     id,
     requests,
-    capabilities: () => defineCapabilities({ toolCalling: true }),
+    capabilities: () => defineCapabilities({ toolCalling: true, contextWindow: 128_000, maxOutputTokens: 8192, ...capabilities }),
     normalizeMessages: (m) => m,
     normalizeTools: (t) => t,
     ...(validate ? { validate } : {}),
@@ -36,7 +36,9 @@ export function createFakeProvider({ id = 'fake', script = [], turns = null, fai
       if (pendingFailures.length) throw pendingFailures.shift() // does not consume a scripted turn
       const n = ++served
       let events = script
-      if (turns) {
+      if (respond) {
+        events = (await respond(request, n, onEvent)) ?? []
+      } else if (turns) {
         const t = turns[n - 1]
         if (t === undefined) throw new Error(`fake provider script exhausted at request ${n}`)
         events = typeof t === 'function' ? (await t(request, n, onEvent)) ?? [] : t

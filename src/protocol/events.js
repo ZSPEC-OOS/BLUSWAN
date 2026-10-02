@@ -9,6 +9,7 @@ export const EVENT_TYPES = Object.freeze([
   'assistant.text.completed',
   'assistant.reasoning.status',
   'provider.retry',
+  'context.compacted',
   'tool.started',
   'tool.completed',
   'tool.failed',

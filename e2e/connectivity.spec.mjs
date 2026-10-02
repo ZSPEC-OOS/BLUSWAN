@@ -76,8 +76,9 @@ test.describe('offline and reconnect', () => {
     await expect(page.getByRole('button', { name: 'Send' })).toBeDisabled()
     await expect(composer(page)).toBeVisible()
     await ctl.post(request, 'backend/start')
-    await banner(page).getByRole('button', { name: 'Try now' }).click()
-    await expect(banner(page)).toHaveCount(0, { timeout: 15_000 })
+    // either the automatic retry or an immediate "Try now" brings it back; the click may race a recovery that already happened
+    await banner(page).getByRole('button', { name: 'Try now' }).click({ timeout: 3000 }).catch(() => {})
+    await expect(banner(page)).toHaveCount(0, { timeout: 20_000 })
     await send(page, 'hello again')
     await expect(conversationLog(page)).toContainText('Hello from the scripted model.')
   })

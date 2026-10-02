@@ -67,6 +67,7 @@ When something does not connect: [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTIN
 | `npm test` | All offline tests (deterministic; no network, no live providers) |
 | `npm run lint` | ESLint |
 | `npm run doctor` | Checks environment, runtime, readiness, storage, workspace roots, event stream and CORS (`-- --url …`, `-- --live` for opt-in billable provider checks) |
+| `npm run dogfood` | BLUSWAN repairs a seeded defect in a disposable worktree of its own repo; your checkout is never modified, nothing is pushed ([docs/DOGFOODING.md](docs/DOGFOODING.md)) |
 | `npm run test:e2e` | Builds the app and runs the browser suite (Chromium, desktop + phone viewport) against the real runtime with a scripted model — offline, free |
 | `npm run test:release` | `npm test` + lint + build + browser suite (no live providers) — the [release checklist](docs/RELEASE_CHECKLIST.md) gate |
 | `npm run test:deepseek` · `test:kimi` · `test:openai` · `test:anthropic` | Optional live smoke test per provider (needs credentials) |

@@ -7,7 +7,8 @@ import { parseOutput, stripAnsi } from './resultParser.js'
 const AUTO_ALLOWED = new Set(['read', 'workspace_write'])
 const EXCERPT_CHARS = 3_000
 // Non-interactive, colorless, single-run behavior for test/lint tooling.
-export const VALIDATION_ENV = Object.freeze({ CI: '1', NO_COLOR: '1', FORCE_COLOR: '0' })
+// npm_config_loglevel: failure classification reads npm's error text, so an inherited `--silent` must not hide it
+export const VALIDATION_ENV = Object.freeze({ CI: '1', NO_COLOR: '1', FORCE_COLOR: '0', npm_config_loglevel: 'warn' })
 
 /** Keeps the beginning and the end: tool summaries are usually at the end, the first error at the start. */
 export function excerpt(text, max = EXCERPT_CHARS) {

@@ -28,6 +28,7 @@
     "test:anthropic": "node --env-file-if-exists=.env scripts/provider-smoke.mjs anthropic",
     "test:e2e": "vite build && playwright test -c e2e/playwright.config.mjs",
     "test:release": "npm test && npm run lint && npm run build && npm run test:e2e",
+    "dogfood": "node --env-file-if-exists=.env scripts/dogfood.mjs",
     "doctor": "node --env-file-if-exists=.env scripts/doctor.mjs",
     "eval": "node --env-file-if-exists=.env scripts/eval.mjs"
   },

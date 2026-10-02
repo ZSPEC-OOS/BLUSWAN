@@ -104,7 +104,7 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
         changedCount: review.loaded ? review.diffSummary.files : (session.changedCount ?? session.changedFiles.length),
       }
     }
-    const model = selectModel() ?? session?.model ?? { provider: 'deepseek', model: '' }
+    const model = selectModel() ?? session?.model ?? runtime.getDefaultModel?.() ?? { provider: '', model: '' }
     const readiness = runtime.checkModel ? runtime.checkModel(model) : { ok: true }
     return {
       sessions, activeId, active, notice,
@@ -115,6 +115,7 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
       canOpenWorkspaces: runtime.canOpenWorkspaces?.() ?? false,
       permissionMode: runtime.getPermissionMode?.() ?? 'auto_edit',
       providers: runtime.listProviders?.() ?? [],
+      models: runtime.getModels?.() ?? [],
       model,
       setup: readiness.ok ? { ready: true } : { ready: false, reason: readiness.reason, message: readiness.message },
     }
@@ -243,6 +244,16 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
     },
     async saveSettings(patch) { try { await runtime.saveSettings?.(patch) } catch (e) { setNotice({ kind: 'error', text: e?.message || "Couldn't save settings.", details: e?.code }) } invalidate() },
     retryLoad: () => { if (activeId) runtime.loadSession?.(activeId, { force: true }) },
+    /** Picks the model for new conversations and, between runs, for the open one (applies to its next run). */
+    async chooseModel({ provider, model }) {
+      settings?.update({ provider, model })
+      runtime.saveSettings?.({ provider, model }).catch(() => {})
+      const id = activeId
+      if (id && runtime.setSessionModel && !BUSY.has(ensure(runtime.getSession(id)).getView().status)) {
+        try { await runtime.setSessionModel(id, { provider, model }) } catch (e) { setNotice({ kind: 'error', text: friendlyError(e), details: e?.message }) }
+      }
+      invalidate()
+    },
     dismissNotice: () => setNotice(null),
     refresh: invalidate,
   }

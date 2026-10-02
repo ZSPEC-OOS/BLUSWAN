@@ -49,6 +49,8 @@ export const ERROR_CODES = Object.freeze([
   'context_budget_exceeded',
   'context_compaction_failed',
   'context_invalid_history',
+  'context_limit',
+  'unsupported_feature',
 ])
 
 export function newId() {

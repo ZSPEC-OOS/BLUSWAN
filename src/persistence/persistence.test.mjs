@@ -133,7 +133,7 @@ describe('repositories', () => {
     const repo = createSettingsRepository(createMemoryPersistence(), { userId: 'alice' })
     await repo.save({ permissionMode: 'full_auto', model: 'deepseek-chat', apiKey: 'sk-secret-123456789', baseUrl: 'x' })
     const s = await repo.load()
-    assert.deepEqual(s, { permissionMode: 'full_auto', provider: 'deepseek', model: 'deepseek-chat' })
+    assert.deepEqual(s, { permissionMode: 'full_auto', provider: '', model: 'deepseek-chat' })
     assert.doesNotMatch(JSON.stringify(s), /sk-secret/)
   })
 })
@@ -235,7 +235,7 @@ describe('architecture boundaries', () => {
     }
   })
   it('browser-side code (client, shared persistence, protocol) imports no Node built-ins or server modules', async () => {
-    const browserSide = [...await sources('client'), 'persistence/persistence.js', 'persistence/docStore.js', 'persistence/serializer.js', 'persistence/migration.js', 'persistence/adapters/localPersistence.js', 'sessions/title.js', 'App.jsx']
+    const browserSide = [...await sources('client'), 'persistence/persistence.js', 'persistence/docStore.js', 'persistence/serializer.js', 'persistence/migration.js', 'persistence/adapters/localPersistence.js', 'utils/title.js', 'App.jsx']
     for (const f of browserSide) {
       const bad = (await importsOf(f)).filter(i => /^node:/.test(i) || /\/(server|providers\/credentials)\//.test(i) || /filePersistence|firebasePersistence/.test(i))
       assert.deepEqual(bad.filter(i => !/\/testing\//.test(i)), [], `${f} imports ${bad}`)
@@ -246,5 +246,22 @@ describe('architecture boundaries', () => {
       const text = await fs.readFile(path.join(root, f), 'utf8')
       assert.doesNotMatch(text, /DEEPSEEK_API_KEY|VITE_[A-Z_]*API_KEY/, f)
     }
+  })
+})
+
+describe('large sessions', () => {
+  it('serialize → store → load → validate stays fast for long histories', async () => {
+    const s = sessionOf('long')
+    s.messages = Array.from({ length: 3000 }, (_, i) => ({ id: `m${i}`, role: i % 3 === 2 ? 'tool' : i % 3 ? 'assistant' : 'user', content: `message ${i} ${'x'.repeat(200)}`, timestamp: i, ...(i % 3 === 2 ? { toolCallId: `t${i}` } : {}) }))
+    s.events = Array.from({ length: 8000 }, (_, i) => createEvent(i % 2 ? 'assistant.text.delta' : 'tool.started', 'long', { i }))
+    const p = createMemoryPersistence()
+    const t0 = Date.now()
+    const rec = serializeSession(s, { userId: 'alice' })
+    await p.saveSession('alice', rec)
+    const loaded = await p.loadSession('alice', 'long')
+    toRuntimeSession(loaded)
+    const ms = Date.now() - t0
+    assert.ok(rec.events.length <= 4000, 'event history is capped')
+    assert.ok(ms < 2500, `took ${ms}ms`)
   })
 })

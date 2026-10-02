@@ -71,6 +71,7 @@ export function createHttpHandler({ service, auth, corsOrigin = null, heartbeatM
         if (m === 'DELETE') return ok(await service.deleteSession(user, id))
       }
       if (seg[2] === 'messages' && m === 'POST') return ok(await service.sendMessage(user, id, body.content), 202)
+      if (seg[2] === 'model' && m === 'PUT') return ok(await service.setModel(user, id, body))
       if (seg[2] === 'cancel' && m === 'POST') return ok(await service.cancel(user, id))
       if (seg[2] === 'permissions' && seg[3] && m === 'POST') {
         if (body.decision === 'approve') return ok(await service.approve(user, id, seg[3]))
@@ -102,7 +103,7 @@ export function createHttpHandler({ service, auth, corsOrigin = null, heartbeatM
       if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end() }
       const url = new URL(req.url, 'http://localhost')
       if (!url.pathname.startsWith('/api/')) return send(res, 404, { error: { code: 'not_found', message: 'Not found.' } }, cors)
-      if (url.pathname === '/api/health') return send(res, 200, { ok: true }, cors)
+      if (url.pathname === '/api/health') return send(res, 200, { ok: true, auth: auth.mode === 'firebase' ? 'firebase' : 'none' }, cors)
       const user = await auth.verify(bearerToken(req))
       if (url.pathname === '/api/stream' && req.method === 'GET') return await stream(req, res, user)
       return await route(req, res, url, user)

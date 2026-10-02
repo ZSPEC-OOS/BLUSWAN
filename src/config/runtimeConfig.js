@@ -109,7 +109,7 @@ export function loadRuntimeConfig(env = readEnv()) {
     const envKey = `VITE_BLUSWAN_LIMIT_${key.replace(/[A-Z]/g, c => `_${c}`).toUpperCase()}`
     limits[key] = int(env[envKey], fallback)
   }
-  const deepseekModel = env.DEEPSEEK_MODEL || env.VITE_DEEPSEEK_MODEL || ''
+  const deepseekModel = env.DEEPSEEK_MODEL || ''
   return Object.freeze({
     defaultProvider: env.VITE_BLUSWAN_PROVIDER || DEFAULTS.defaultProvider,
     defaultModel: env.VITE_BLUSWAN_MODEL || deepseekModel,
@@ -129,10 +129,13 @@ export function loadRuntimeConfig(env = readEnv()) {
     ...validation,
     devLogging: env.VITE_BLUSWAN_DEV_LOGGING === 'true' || !!env.DEV,
     providers: Object.freeze({
+      kimi: Object.freeze({ apiKey: env.KIMI_API_KEY || '', baseUrl: env.KIMI_BASE_URL || 'https://api.moonshot.ai/v1', model: env.KIMI_MODEL || '' }),
+      openai: Object.freeze({ apiKey: env.OPENAI_API_KEY || '', baseUrl: env.OPENAI_BASE_URL || 'https://api.openai.com/v1', model: env.OPENAI_MODEL || '' }),
+      anthropic: Object.freeze({ apiKey: env.ANTHROPIC_API_KEY || '', baseUrl: env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com', model: env.ANTHROPIC_MODEL || '' }),
       deepseek: Object.freeze({
         // Secrets are server-side only: a VITE_-prefixed variable is compiled into the browser bundle, so it is never read.
         apiKey: env.DEEPSEEK_API_KEY || '',
-        baseUrl: env.DEEPSEEK_BASE_URL || env.VITE_DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
+        baseUrl: env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
         model: deepseekModel,
       }),
     }),

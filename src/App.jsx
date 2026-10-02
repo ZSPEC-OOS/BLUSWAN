@@ -1,10 +1,11 @@
 import React from 'react'
 import { useEffect, useState } from 'react'
-import AuthBoundary, { Splash } from './client/AuthBoundary.jsx'
+import AuthBoundary, { Splash } from './auth/AuthBoundary.jsx'
 import AppShell from './client/AppShell.jsx'
 import { createSettingsStore, scrubLegacySecrets } from './client/settings/settingsStore.js'
 import { createRemoteRuntime, createIndexCache } from './client/runtime/createRemoteRuntime.js'
 import { createClientStore } from './client/state/clientStore.js'
+import { pickModel } from './client/models/modelSelection.js'
 import { createIndexedDbDocStore, openIndexedDb } from './persistence/adapters/localPersistence.js'
 
 const API_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_BLUSWAN_API_URL) || ''
@@ -31,7 +32,7 @@ function Connected({ identity }) {
       const settings = createSettingsStore()
       store = createClientStore({
         runtime, settings,
-        selectModel: () => ({ provider: 'deepseek', model: settings.get().model || runtime.getProviderStatus().find(p => p.provider === 'deepseek')?.model || '' }),
+        selectModel: () => pickModel({ settings: settings.get(), models: runtime.getModels(), defaultModel: runtime.getDefaultModel() }),
       })
       setState({ phase: 'ready', store, settings, runtime })
     })().catch((e) => { if (!cancelled) setState({ phase: 'error', message: e?.status === 401 ? 'Your session has expired. Sign in again.' : 'BLUSWAN could not reach its server.' }) })

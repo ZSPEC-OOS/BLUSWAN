@@ -343,6 +343,27 @@ describe('restart and recovery over HTTP', () => {
   })
 })
 
+describe('resource cleanup', () => {
+  it('closing an event stream releases its listener; reconnecting does not accumulate listeners', async () => {
+    const s = await boot({ respond: scripted() })
+    const user = TOKENS['tok-alice']
+    assert.equal(await s.service.listenerCount(user), 0)
+    const streams = []
+    for (let i = 0; i < 5; i++) streams.push(await openStream(s.base, 'tok-alice'))
+    await until(async () => (await s.service.listenerCount(user)) === 5)
+    for (const st of streams) st.close()
+    await until(async () => (await s.service.listenerCount(user)) === 0)
+  })
+  it('logout releases the user\'s streams and runtime', async () => {
+    const s = await boot({ respond: scripted() })
+    const user = TOKENS['tok-alice']
+    await openStream(s.base, 'tok-alice')
+    await until(async () => (await s.service.listenerCount(user)) === 1)
+    await api(s.base, 'tok-alice')('POST', '/api/logout', {})
+    assert.equal(await s.service.listenerCount(user), 0)
+  })
+})
+
 describe('error handling', () => {
   it('returns normalized errors without stack traces or secrets', async () => {
     const s = await boot({ respond: scripted() })

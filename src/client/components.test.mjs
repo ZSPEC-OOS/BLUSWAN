@@ -154,3 +154,39 @@ describe('persistence and restore UI', () => {
     assert.match(await render(await h(M.settings, { settings: { model: '' }, providers: [{ provider: 'deepseek', label: 'DeepSeek', configured: false }], onSave: noop, permissionMode: 'ask', onPermissionMode: noop, canOpenWorkspaces: true, onOpenWorkspace: noop, setup: { ready: false }, onClose: noop })), /not configured[\s\S]*administrator/)
   })
 })
+
+describe('model selection', () => {
+  let S
+  before(async () => { S = { selector: (await importComponent('status/ModelSelector.jsx')).default, sel: await importComponent('models/modelSelection.js') } })
+  const models = [
+    { provider: 'deepseek', id: 'deepseek-chat', displayName: 'DeepSeek Chat', configured: true, codingCapable: true, capabilities: { reasoning: false } },
+    { provider: 'openai', id: 'gpt-5', displayName: 'GPT-5', configured: true, codingCapable: true, capabilities: { reasoning: true } },
+    { provider: 'anthropic', id: 'claude-sonnet-5-5', displayName: 'Claude Sonnet 5.5', configured: false, codingCapable: true, capabilities: {} },
+    { provider: 'kimi', id: 'chat-only', displayName: 'Chat only', configured: true, codingCapable: false, capabilities: {} },
+  ]
+  it('groups by provider, labels capabilities, and disables models that cannot be used', () => {
+    const groups = S.sel.modelGroups(models)
+    assert.deepEqual(groups.map(g => g.label), ['DeepSeek', 'OpenAI', 'Anthropic', 'Kimi'])
+    const by = Object.fromEntries(groups.flatMap(g => g.options).map(o => [o.model, o]))
+    assert.deepEqual([by['deepseek-chat'].disabled, by['gpt-5'].label], [false, 'GPT-5 · reasoning'])
+    assert.match(by['claude-sonnet-5-5'].label, /not configured/); assert.equal(by['claude-sonnet-5-5'].disabled, true)
+    assert.match(by['chat-only'].label, /no tool support/); assert.equal(by['chat-only'].disabled, true)
+  })
+  it('keeps an unlisted current model visible', () => {
+    const groups = S.sel.modelGroups(models, { provider: 'openai', model: 'gpt-custom' })
+    assert.ok(groups.find(g => g.provider === 'openai').options.some(o => o.model === 'gpt-custom'))
+  })
+  it('picks the saved choice only while it is usable, else the server default', () => {
+    const def = { provider: 'deepseek', model: 'deepseek-chat' }
+    assert.deepEqual(S.sel.pickModel({ settings: { provider: 'openai', model: 'gpt-5' }, models, defaultModel: def }), { provider: 'openai', model: 'gpt-5' })
+    for (const bad of [{ provider: 'anthropic', model: 'claude-sonnet-5-5' }, { provider: 'kimi', model: 'chat-only' }, { provider: 'x', model: 'y' }, {}]) assert.deepEqual(S.sel.pickModel({ settings: bad, models, defaultModel: def }), def)
+    assert.deepEqual(S.sel.pickModel({ settings: {}, models: [], defaultModel: { provider: '', model: '' } }), { provider: '', model: '' })
+  })
+  it('renders a labelled select with optgroups, disabled while a run is active', async () => {
+    const html = await render(await h(S.selector, { models, current: { provider: 'openai', model: 'gpt-5' }, onChange: noop }))
+    assert.match(html, /aria-label="Model"/); assert.match(html, /<optgroup label="OpenAI">/); assert.match(html, /<option value="openai:gpt-5" selected="">GPT-5 · reasoning/)
+    assert.match(html, /<option value="anthropic:claude-sonnet-5-5" disabled="">[^<]*not configured/)
+    assert.match(await render(await h(S.selector, { models, current: { provider: 'openai', model: 'gpt-5' }, disabled: true, onChange: noop })), /<select[^>]*disabled/)
+    assert.doesNotMatch(html, /adapter|chatCompletions|responses api/i, 'internal adapter names are not shown')
+  })
+})

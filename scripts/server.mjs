@@ -21,6 +21,11 @@ if (authMode === 'none' && !loopback) {
   console.error('Refusing to listen on a non-loopback address with BLUSWAN_AUTH=none (anyone who can reach it could run commands). Use BLUSWAN_AUTH=firebase.')
   process.exit(1)
 }
+const production = env.NODE_ENV === 'production'
+if (production && authMode === 'none' && env.BLUSWAN_ALLOW_NO_AUTH !== '1') {
+  console.error('Refusing to start in production without authentication. Set BLUSWAN_AUTH=firebase (or BLUSWAN_ALLOW_NO_AUTH=1 to accept the risk on a private host).')
+  process.exit(1)
+}
 const auth = authMode === 'firebase' ? createFirebaseVerifier({ projectId: env.FIREBASE_PROJECT_ID }) : createNoAuth()
 
 const persistenceKind = env.BLUSWAN_PERSISTENCE || 'file'
@@ -34,7 +39,7 @@ else if (persistenceKind === 'firebase') {
 } else persistence = createFilePersistence({ dir: path.resolve(env.BLUSWAN_DATA_DIR || '.bluswan/data') })
 
 const roots = (env.BLUSWAN_WORKSPACE_ROOTS || '').split(path.delimiter).filter(Boolean)
-if (authMode !== 'none' && !roots.length) { console.error('BLUSWAN_WORKSPACE_ROOTS is required when authentication is enabled.'); process.exit(1) }
+if ((authMode !== 'none' || production) && !roots.length) { console.error('BLUSWAN_WORKSPACE_ROOTS is required when authentication is enabled or NODE_ENV=production.'); process.exit(1) }
 
 const service = createBluswanService({
   persistence, credentials: createEnvCredentialStore(env), hostId: env.BLUSWAN_HOST_ID || os.hostname(),

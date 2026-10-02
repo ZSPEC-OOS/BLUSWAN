@@ -273,7 +273,7 @@ describe('tool executor + tools', () => {
     })
     it('truncates output and validates env', async () => {
       const small = await createLocalWorkspace({ root: fx.root, limits: { maxShellOutputBytes: 50 } })
-      const r = await run('shell', { command: `node -e "console.log('z'.repeat(1000))"` }, { workspace: small })
+      const r = await run('shell', { command: 'yes zzzzzzzzzz | head -n 100' }, { workspace: small })
       assert.equal(r.output.truncated, true)
       await fail('shell', { command: 'true', env: { A: 1 } }, 'invalid_input')
     })

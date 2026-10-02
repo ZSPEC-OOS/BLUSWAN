@@ -52,7 +52,7 @@ export async function runProviderTurn({ provider, request, signal, config, acc, 
             turn.toolCalls.push({ id: ev.id, name: ev.name, input: ev.input, ...(ev.inputError ? { inputError: ev.inputError } : {}) })
             break
           case 'usage':
-            turn.usage = { input: ev.input, output: ev.output, reasoning: ev.reasoning ?? 0, total: ev.total }
+            turn.usage = { input: ev.input, output: ev.output, reasoning: ev.reasoning ?? 0, total: ev.total, ...(ev.cachedInput != null ? { cachedInput: ev.cachedInput } : {}) }
             break
           case 'completed':
             turn.finishReason = ev.finishReason

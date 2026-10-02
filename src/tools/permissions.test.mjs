@@ -47,7 +47,8 @@ describe('classifyCommand', () => {
     assert.equal(effect('echo hi > out.txt'), 'workspace_write')
     assert.equal(effect('echo hi > /dev/null 2>&1'), 'read')
     assert.equal(effect('sed -i s/a/b/ f'), 'workspace_write')
-    assert.equal(effect('git commit -m x'), 'workspace_write')
+    assert.equal(effect('git add -A'), 'workspace_write')
+    assert.equal(effect('git commit -m x'), 'destructive', 'BLUSWAN never commits without being asked')
   })
   it('only returns defined effects', () => {
     for (const c of ['', 'x', 'a | b', 'npm', 'git', 'rm']) assert.ok(EFFECTS.includes(effect(c)), c)

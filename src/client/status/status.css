@@ -7,3 +7,5 @@
 @media (max-width: 760px) { .topbar__menu { display: inline-flex; } }
 .save { font-size: var(--text-xs); color: var(--text-faint); } .save--failed { color: var(--warning); }
 .banner-offline { display: flex; gap: var(--space-2); align-items: center; padding: var(--space-1) var(--space-3); font-size: var(--text-xs); color: var(--warning); background: var(--warn-bg); border-bottom: 1px solid var(--warn-border); }
+.model-select select { max-width: 14rem; font: inherit; font-size: .82rem; color: var(--text); background: var(--surface-elevated); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: .25rem .4rem; }
+.model-select select:disabled { opacity: .6; cursor: not-allowed; }

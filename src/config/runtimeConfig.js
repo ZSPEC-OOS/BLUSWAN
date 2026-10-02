@@ -1,5 +1,6 @@
-// Centralized runtime configuration. Credentials come from the environment
-// (VITE_* when executing browser-side) and are never logged.
+// Centralized runtime configuration, read by the server and CLI from the process environment (BLUSWAN_* tuning,
+// provider variables). Nothing here is read from VITE_* variables: those are compiled into the public web bundle.
+// Credentials are never logged.
 
 const DEFAULTS = Object.freeze({
   defaultProvider: 'deepseek',

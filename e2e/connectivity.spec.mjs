@@ -71,6 +71,8 @@ test.describe('offline and reconnect', () => {
     await expect(banner(page)).toContainText('Offline — showing your saved conversations')
     await openSidebar(page)
     await expect(page.getByRole('navigation', { name: 'Conversation list' })).toContainText('Hello cached')
+    const close = page.getByRole('button', { name: 'Close sidebar' })
+    if (await close.isVisible().catch(() => false)) await close.click() // phone drawer
     await expect(page.getByRole('button', { name: 'Send' })).toBeDisabled()
     await expect(composer(page)).toBeVisible()
     await ctl.post(request, 'backend/start')
@@ -187,5 +189,23 @@ test.describe('isolation, outages and workspace loss', () => {
     await expect(page.getByText(/Workspace unavailable/)).toBeVisible()
     await expect(page.getByRole('button', { name: 'Open settings' })).toBeVisible()
     await ctl.post(request, 'repo/move', '?on=0')
+  })
+})
+
+test.describe('phone layout', () => {
+  test('connection screen and offline banner fit a phone, with usable touch targets @mobile', async ({ page, request }) => {
+    await ctl.post(request, 'backend/stop')
+    await page.goto('/')
+    await expect(screen(page)).toContainText('could not reach its runtime')
+    const noScroll = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
+    expect(noScroll, 'no horizontal scrolling').toBe(true)
+    for (const name of ['Try again', 'Connection details']) {
+      const box = await screen(page).getByRole('button', { name }).boundingBox()
+      expect(box.height, `${name} is at least 44px tall`).toBeGreaterThanOrEqual(43)
+    }
+    await ctl.post(request, 'backend/start')
+    await expect(composer(page)).toBeVisible({ timeout: 20_000 })
+    const input = await composer(page).evaluate((el) => parseFloat(getComputedStyle(el).fontSize))
+    expect(input, 'composer text is at least 16px so iOS does not zoom').toBeGreaterThanOrEqual(16)
   })
 })

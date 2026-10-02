@@ -50,6 +50,11 @@ recover from a failing test — in disposable repositories and reports, per task
 model's claim), validation status, turns, tool calls, duplicate calls, files changed and unnecessary files changed,
 tokens and duration. It reports raw numbers and does not rank providers.
 
+### Dogfooding
+
+`npm run dogfood` has BLUSWAN repair a seeded defect in a disposable worktree of its own repository (scripted model by default; `-- --provider <id>` for a real one).
+The checkout you run it from is never modified and nothing is pushed. See [DOGFOODING.md](DOGFOODING.md); raw provider baselines live in [BASELINES.md](BASELINES.md).
+
 ## Conventions
 
 - New behaviour that varies by model goes behind a **capability**, never a provider name (guarded by `architecture.test.mjs`).

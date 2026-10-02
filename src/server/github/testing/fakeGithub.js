@@ -18,7 +18,7 @@ export function generateAppKey() {
 /**
  * @param {{repos?:{owner:string,name:string,private?:boolean,defaultBranch?:string,files?:Record<string,string>}[], installationId?:number, login?:string}} options
  */
-export async function startFakeGithub({ repos = [{ owner: 'acme', name: 'widgets', private: true }], installationId = 4242, login = 'octo' } = {}) {
+export async function startFakeGithub({ repos = [{ owner: 'acme', name: 'widgets', private: true }], installationId = 4242, login = 'octo', redirectTo = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blu-fakegh-'))
   const state = { repos: new Map(), prs: [], nextPr: 1, fail: [], calls: [], checks: new Map(), tokens: 0, pushRejections: new Set(), codes: new Map() }
   const key = (o, r) => `${o}/${r}`.toLowerCase()
@@ -62,6 +62,10 @@ export async function startFakeGithub({ repos = [{ owner: 'acme', name: 'widgets
       return send(injected.status, { message: injected.message ?? 'injected failure' }, injected.headers)
     }
     let m
+    if (req.method === 'GET' && /^\/apps\/[^/]+\/installations\/new$/.test(p) && redirectTo) { // the GitHub App install page: approve and send the browser back
+      const code = `code-${crypto.randomBytes(6).toString('hex')}`; state.codes.set(code, true)
+      res.writeHead(302, { Location: `${redirectTo}/?code=${code}&installation_id=${installationId}&state=${encodeURIComponent(url.searchParams.get('state') ?? '')}&setup_action=install` }); return res.end()
+    }
     if (req.method === 'POST' && (m = /^\/app\/installations\/(\d+)\/access_tokens$/.exec(p))) { state.tokens += 1; return send(201, { token: `ghs_fake${String(state.tokens).padStart(24, '0')}`, expires_at: new Date(Date.now() + 3600_000).toISOString() }) }
     if (req.method === 'POST' && p === '/login/oauth/access_token') {
       const code = body?.code; if (!state.codes.has(code)) return send(200, { error: 'bad_verification_code' })

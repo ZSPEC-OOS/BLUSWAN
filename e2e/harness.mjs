@@ -11,11 +11,17 @@ import fs from 'node:fs/promises'
 import fsSync from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { execFileSync } from 'node:child_process'
 import { startServer } from '../src/server/main.js'
 import { createCredentialStore } from '../src/providers/credentials/credentialStore.js'
 import { createFakeProvider, say, call, reply } from '../src/agent/testing/fakeProvider.js'
 import { createFixtureRepo, FIX_ADD_PATCH } from '../src/workspace/testing/fixtureRepo.js'
 import { createError } from '../src/protocol/schemas.js'
+import { startFakeGithub, generateAppKey } from '../src/server/github/testing/fakeGithub.js'
+import { createGithubApi } from '../src/server/github/api.js'
+import { createAppAuth } from '../src/server/github/appAuth.js'
+import { clonePath } from '../src/server/github/paths.js'
+import { FIXTURE_FILES } from '../src/workspace/testing/fixtureRepo.js'
 
 const PORT = Number(process.env.E2E_PORT || 4173)
 const DIST = path.resolve(import.meta.dirname, '../dist')
@@ -25,7 +31,7 @@ const state = {
   backend: null, backendPort: 0, root: null, dataDir: null, repo: null,
   tokens: new Map(), // user → token the gateway attaches
   valid: new Set(), generation: 0,
-  providerMode: 'ok', readyFail: false, streamBlocked: false, proxied: new Set(), requests: 0,
+  fake: null, providerMode: 'ok', readyFail: false, streamBlocked: false, proxied: new Set(), requests: 0,
 }
 
 const tokenFor = (user) => state.tokens.get(user) ?? `tok-${user}-${state.generation}`
@@ -82,9 +88,15 @@ async function startBackend() {
   const probe = persistence.probe
   persistence.probe = async () => { if (state.readyFail) throw new Error('forced'); return probe() }
   const credentials = createCredentialStore({ deepseek: { apiKey: 'e2e-not-a-real-key', baseUrl: 'http://invalid.test', model: 'scripted-model' } })
+  const api = createGithubApi({ apiUrl: state.fake.url })
+  const github = {
+    settings: { configured: true, webhook: false, apiUrl: state.fake.url, webUrl: state.fake.url, slug: 'bluswan-e2e' }, api, webApi: api,
+    appAuth: createAppAuth({ appId: '1', privateKey: state.appKey, api }),
+    secrets: { clientId: 'cid', clientSecret: 'e2e-client-secret', webhookSecret: 'e2e-hook', stateSecret: 'e2e-client-secret' }, cloneUrlOk: () => true,
+  }
   state.backend = await startServer({
     env: backendEnv(), heartbeatMs: 1000, shutdownDeadlineMs: 1500,
-    injected: { auth, persistence, credentials, providerFactory: () => createFakeProvider({ id: 'deepseek', respond }) },
+    injected: { auth, persistence, credentials, github, providerFactory: () => createFakeProvider({ id: 'deepseek', respond }) },
   })
   state.backendPort = state.backend.port
 }
@@ -95,6 +107,9 @@ async function stopBackend() {
 }
 async function reset() {
   await stopBackend()
+  await state.fake?.close().catch(() => {})
+  state.appKey ??= generateAppKey()
+  state.fake = await startFakeGithub({ repos: [{ owner: 'acme', name: 'widgets', private: true, files: FIXTURE_FILES }], redirectTo: `http://127.0.0.1:${PORT}` })
   if (state.root) await fs.rm(state.root, { recursive: true, force: true })
   state.root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'bluswan-e2e-')))
   state.dataDir = path.join(state.root, '.data')
@@ -141,6 +156,15 @@ async function control(req, res, url) {
     return json(res, 200, { ok: true })
   }
   if (op === 'health-protocol') { state.protocolOverride = q.get('v') ? Number(q.get('v')) : null; return json(res, 200, { ok: true }) }
+  if (op === 'gh/merge') { const sha = state.fake.merge(Number(q.get('n') ?? 1), { method: q.get('method') ?? 'merge', deleteBranch: q.get('deleteBranch') === '1' }); return json(res, 200, { sha }) }
+  if (op === 'gh/remote') return json(res, 200, { branches: ['main', ...(q.get('branch') ? [q.get('branch')] : [])].filter(b => state.fake.hasRemoteBranch('acme', 'widgets', b)), prs: state.fake.state.prs.map(p => ({ number: p.number, state: p.state, merged: !!p.merged_at, head: p.head })), tokenRequests: state.fake.state.tokens })
+  if (op === 'gh/break-remote') { const r = state.fake.state.repos.get('acme/widgets'); if (q.get('on') === '1') { r.goodBare = r.bare; r.bare = `${r.bare}.missing` } else if (r.goodBare) { r.bare = r.goodBare }; return json(res, 200, { ok: true }) }
+  if (op === 'gh/reject-pushes') { state.fake.rejectPushes('acme', 'widgets'); return json(res, 200, { ok: true }) }
+  if (op === 'gh/local') {
+    const dir = clonePath({ root: state.root, userId: q.get('user') ?? 'alice', owner: 'acme', repo: 'widgets' })
+    const git = (...a) => execFileSync('git', a, { cwd: dir, stdio: 'pipe' }).toString().trim()
+    try { return json(res, 200, { exists: true, branch: git('rev-parse', '--abbrev-ref', 'HEAD'), status: git('status', '--porcelain'), branches: git('branch', '--format=%(refname:short)').split('\n').filter(Boolean), math: fsSync.readFileSync(path.join(dir, 'src/math.js'), 'utf8') }) } catch { return json(res, 200, { exists: false }) }
+  }
   if (op === 'stats') return json(res, 200, { ...(await state.backend?.service.stats()), requests: state.requests, proxiedStreams: state.proxied.size })
   return json(res, 404, { error: 'unknown control' })
 }
@@ -190,4 +214,4 @@ const front = http.createServer(async (req, res) => {
 })
 await reset()
 front.listen(PORT, '127.0.0.1', () => console.log(`e2e harness on http://127.0.0.1:${PORT}`))
-for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, async () => { await stopBackend().catch(() => {}); await fs.rm(state.root, { recursive: true, force: true }).catch(() => {}); process.exit(0) })
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, async () => { await stopBackend().catch(() => {}); await state.fake?.close().catch(() => {}); await fs.rm(state.root, { recursive: true, force: true }).catch(() => {}); process.exit(0) })

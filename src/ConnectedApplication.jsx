@@ -34,7 +34,7 @@ export default function ConnectedApplication({ identity }) {
           const settings = createSettingsStore()
           store = createClientStore({ runtime, settings, selectModel: () => pickModel({ settings: settings.get(), models: runtime.getModels(), defaultModel: runtime.getDefaultModel() }) })
           github = runtime.github ? createGithubStore({
-            runtime, workspaceId: () => store.getSnapshot().active?.workspace?.id ?? null, canAct: () => store.getSnapshot().canAct !== false,
+            runtime, workspaceId: () => store.getSnapshot().active?.workspace?.id ?? null, canAct: () => store.getSnapshot().connection.state === 'online', // network actions need a live connection, not just a reachable one
             runBusy: () => !!store.getSnapshot().active?.composer?.busy, startTask: (workspaceId) => store.newSession({ workspaceId }),
           }) : null
           github?.loadStatus().then(() => github.completeFromLocation())

@@ -61,7 +61,8 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = 
   // the repository workflow re-reads git when the repository, connectivity or the agent's run state changes
   const wsId = snapshot.active?.workspace?.id ?? null
   const runBusy = !!snapshot.active?.composer?.busy
-  useEffect(() => { gh?.notifyContextChanged() }, [gh, wsId, snapshot.canAct, runBusy, snapshot.activeId])
+  const online = snapshot.connection.state === 'online'
+  useEffect(() => { gh?.notifyContextChanged() }, [gh, wsId, online, runBusy, snapshot.activeId])
   const select = useCallback((id) => { store.selectSession(id); setSidebarOpen(false) }, [store])
   const send = useCallback((text) => store.sendMessage(text).ok, [store])
   const closeSettings = useCallback(() => setSettingsOpen(false), [])
@@ -103,7 +104,7 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = 
           permissionMode={snapshot.permissionMode} onPermissionMode={store.setPermissionMode}
           onOpenSettings={() => setSettingsOpen(true)} onToggleSidebar={() => setSidebarOpen(o => !o)} onToggleChanges={toggleChanges} panelOpen={panelOpen} models={snapshot.models} onChooseModel={store.chooseModel}
         />
-        {gh ? <WorkflowBar busy={runBusy} offline={!snapshot.canAct} onReviewDiff={toggleChanges} /> : null}
+        {gh ? <WorkflowBar busy={runBusy} offline={!online} onReviewDiff={toggleChanges} /> : null}
         {gh && !snapshot.active?.workspace ? (
           <div className="conversation__banner gh-empty" role="status">
             <span>Choose a repository to start coding.</span>

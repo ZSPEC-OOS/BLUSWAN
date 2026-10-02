@@ -119,7 +119,7 @@ describe('dependency directions', () => {
     for (const f of code.filter(x => top(x) === 'persistence')) for (const s of specifiers(f)) assert.doesNotMatch(s, /firebase/i, rel(f))
   })
   it('browser code imports no Node built-ins, server modules or storage backends that need them', () => {
-    const browser = code.filter(f => ['client', 'auth', 'App', 'main'].includes(top(f)))
+    const browser = code.filter(f => ['client', 'auth', 'App', 'ConnectedApplication', 'main'].includes(top(f)))
     for (const f of [...browser, ...['persistence/persistence.js', 'persistence/docStore.js', 'persistence/serializer.js', 'persistence/migration.js', 'persistence/adapters/localPersistence.js', 'utils/title.js'].map(p => path.join(ROOT, p))]) {
       for (const s of specifiers(f)) assert.doesNotMatch(s, /^node:|\/server\/|providers\/credentials|filePersistence|firebasePersistence|providers\/(deepseek|kimi|openai|anthropic|adapter|transport)/, `${rel(f)} imports ${s}`)
     }
@@ -132,7 +132,7 @@ describe('dependency directions', () => {
 describe('secrets stay on the server', () => {
   it('browser code never names provider secrets or VITE_ keys', () => {
     // (auth/firebaseAuth.js reads the public Firebase web config, which is not a secret)
-    for (const f of code.filter(x => ['client', 'auth', 'App', 'main'].includes(top(x)) && rel(x) !== 'auth/firebaseAuth.js')) assert.doesNotMatch(read(f), /(DEEPSEEK|KIMI|OPENAI|ANTHROPIC)_API_KEY|VITE_[A-Z_]*(API_KEY|SECRET|TOKEN)\b/, rel(f))
+    for (const f of code.filter(x => ['client', 'auth', 'App', 'ConnectedApplication', 'main'].includes(top(x)) && rel(x) !== 'auth/firebaseAuth.js')) assert.doesNotMatch(read(f), /(DEEPSEEK|KIMI|OPENAI|ANTHROPIC)_API_KEY|VITE_[A-Z_]*(API_KEY|SECRET|TOKEN)\b/, rel(f))
   })
   it('no source or example config contains a real-looking key', () => {
     const files = [...all, ...walk(path.join(REPO, 'scripts')), path.join(REPO, '.env.example')]
@@ -142,5 +142,37 @@ describe('secrets stay on the server', () => {
     }
     const env = read(path.join(REPO, '.env.example'))
     for (const line of env.split('\n')) if (/^[A-Z_]*(KEY|SECRET|TOKEN)[A-Z_]*=/.test(line)) assert.match(line, /=\s*$/, `.env.example must hold names only: ${line.split('=')[0]}`)
+  })
+})
+
+describe('release-stabilization guards', () => {
+  const BROWSER = ['client', 'auth', 'App', 'ConnectedApplication', 'main']
+  const browserFiles = code.filter(f => BROWSER.includes(top(f)))
+
+  it('introduces no parallel runtime: no V4 / new* / runtime-v2 modules anywhere', () => {
+    for (const f of [...all, ...walk(path.join(REPO, 'scripts')), ...walk(path.join(REPO, 'e2e'))]) assert.doesNotMatch(path.basename(f), /^new(Runtime|Server|Persistence|ContextEngine|Engine|Agent)|v4|runtime-v2|-v2\b/i, f)
+  })
+  it('the application shell never builds a local agent runtime, provider, workspace or tool executor', () => {
+    for (const f of code.filter(x => ['App', 'ConnectedApplication', 'auth', 'main'].includes(top(x)))) {
+      const t = strip(read(f))
+      assert.doesNotMatch(t, /createAgentRuntime|createProviderRegistry|createStandardProviders|createNodeWorkspaceManager|createToolExecutor/, rel(f))
+    }
+  })
+  it('server-owned tuning is not read from VITE_ variables: only the public API URL and Firebase web config are', () => {
+    for (const f of all.filter(x => !/\.test\.mjs$/.test(x))) {
+      for (const m of strip(read(f)).matchAll(/VITE_[A-Z0-9_]+/g)) assert.ok(/^VITE_(BLUSWAN_API_URL|FIREBASE_(API_KEY|AUTH_DOMAIN|PROJECT_ID|APP_ID))$/.test(m[0]), `${rel(f)} reads ${m[0]}`)
+    }
+  })
+  it('browser code does not read the whole import.meta.env object (it would inline every VITE_ variable)', () => {
+    for (const f of browserFiles) assert.doesNotMatch(strip(read(f)), /import\.meta\.env(?!\.|\?\.(DEV|PROD)\b)(?!\s*\.)/, rel(f))
+  })
+  it('runtime configuration for the server never depends on the browser build environment', () => {
+    for (const f of code.filter(x => top(x) === 'server')) assert.doesNotMatch(strip(read(f)), /import\.meta\.env/, rel(f))
+  })
+  it('every API route a browser file calls exists on the server', () => {
+    const http = strip(read(path.join(ROOT, 'server', 'http.js')))
+    const routes = new Set([...http.matchAll(/seg\[0\] === '([a-z-]+)'/g)].map(m => m[1]))
+    for (const r of ['health', 'ready', 'stream']) routes.add(r)
+    for (const f of browserFiles) for (const m of read(f).matchAll(/['"`]\/api\/([a-z-]+)/g)) assert.ok(routes.has(m[1]), `${rel(f)} calls /api/${m[1]} which the server does not serve`)
   })
 })

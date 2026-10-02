@@ -52,7 +52,7 @@ export default function AuthBoundary({ children }) {
       : <ConnectionScreen connection={{ state: 'checking_server' }} />
   }
   if (effectiveMode === 'none') return children(LOCAL)
-  if (!isFirebaseConfigured()) return <ConnectionScreen kind="configuration_error" message="This runtime requires sign-in, but this build of the app has no Firebase web configuration (VITE_FIREBASE_*)." />
+  if (!isFirebaseConfigured()) return <ConnectionScreen kind="configuration_error" message="This runtime requires sign-in, but this build of the app has no Firebase web configuration (see docs/DEPLOYMENT.md)." />
   if (user === undefined) return <ConnectionScreen connection={{ state: 'authenticating' }} />
   if (!user) return <SignIn />
   return children({ id: user.uid, email: user.email || null, getToken: () => user.getIdToken(), signOut: () => signOutUser().catch(() => {}) })

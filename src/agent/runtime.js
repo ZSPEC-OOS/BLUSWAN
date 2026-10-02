@@ -29,6 +29,7 @@ import { createLogger } from '../utils/logger.js'
 import { createDefaultToolRegistry } from '../tools/registry.js'
 import { createToolExecutor } from '../tools/executor.js'
 import { toolFailure } from '../tools/result.js'
+import { decidePermission, describePermission, isPermissionMode, BLOCKED_MESSAGE, DEFAULT_PERMISSION_MODE } from '../tools/permissionModes.js'
 import { createValidationEngine } from '../validation/validationEngine.js'
 import { createValidationState, markMutated, recordShellResult } from '../validation/validationState.js'
 import { createCompletion, collectGitEvidence, formatValidationCycle, formatEvidenceOnly, describeValidationCycle } from './completion.js'
@@ -54,6 +55,7 @@ export function createAgentRuntime({
   workspaces = null, // workspace manager; sessions with a workspaceId get tools
   tools = createDefaultToolRegistry(),
   toolPolicy,
+  approvals = 'unattended', // 'interactive': actions that need approval wait for approvePermission/denyPermission; 'unattended': they fail with permission_required
   now = () => Date.now(),
   sleep, // test seam for retry backoff
   random,
@@ -63,6 +65,8 @@ export function createAgentRuntime({
   const limits = resolveLimits({}, config)
   const toolExecutor = createToolExecutor({ registry: tools, policy: toolPolicy, limits, now })
   const contextEngine = createContextEngine({ config, now })
+  let permissionMode = isPermissionMode(config.permissionMode) ? config.permissionMode : DEFAULT_PERMISSION_MODE
+  const pendingPermissions = new Map() // permissionId → { request, approve(), deny() }
   const validationEngine = createValidationEngine({ config, now })
   const completion = createCompletion({ validationEngine })
   const observations = new WeakMap() // tool result → compact observation (stored on the tool message)
@@ -141,6 +145,60 @@ export function createAgentRuntime({
     sessions.update(sessionId, { changedFiles: [...files, { path, action }] })
   }
 
+  // ─── Permissions ────────────────────────────────────────────────────────────
+
+  /**
+   * Builds the authorization hook for one session's tool calls. Policy comes from the permission mode and the
+   * tool's effect class. When approval is needed and approvals are interactive, the call really waits:
+   * the session enters waiting_permission, `permission.requested` is emitted, and the tool runs only after
+   * approvePermission(); denial (or cancellation) is returned to the model as an ordinary tool failure.
+   */
+  function authorizeFor(sessionId, signal) {
+    return async ({ toolCallId, tool, input, effect, reason }) => {
+      const action = decidePermission(permissionMode, effect)
+      if (action === 'allow') return { allowed: true }
+      if (action === 'block') return { allowed: false, code: 'permission_denied', message: BLOCKED_MESSAGE }
+      if (approvals !== 'interactive') {
+        return { allowed: false, code: 'permission_required', message: `This action requires user approval (${effect}): ${reason ?? tool}` }
+      }
+      if (signal.aborted) return { allowed: false, code: 'tool_cancelled', message: 'Cancelled before approval.' }
+
+      const request = { id: `perm_${newId()}`, sessionId, toolCallId, tool, effect, createdAt: now(), ...describePermission({ tool, input, effect }) }
+      return new Promise((resolve) => {
+        let done = false
+        const settle = (decision, outcome) => {
+          if (done) return
+          done = true
+          signal.removeEventListener('abort', onAbort)
+          pendingPermissions.delete(request.id)
+          emit(sessionId, 'permission.resolved', { id: request.id, toolCallId, decision: outcome })
+          if (sessions.get(sessionId)?.status === 'waiting_permission' && !signal.aborted) {
+            sessions.setStatus(sessionId, 'running')
+            emit(sessionId, 'session.updated', { status: 'running' })
+          }
+          resolve(decision)
+        }
+        const onAbort = () => settle({ allowed: false, code: 'tool_cancelled', message: 'Cancelled while waiting for approval.' }, 'cancelled')
+        signal.addEventListener('abort', onAbort, { once: true })
+        pendingPermissions.set(request.id, {
+          request,
+          approve: () => settle({ allowed: true }, 'approved'),
+          deny: () => settle({ allowed: false, code: 'permission_denied', message: 'The user denied this action.' }, 'denied'),
+        })
+        sessions.setStatus(sessionId, 'waiting_permission')
+        emit(sessionId, 'session.updated', { status: 'waiting_permission' })
+        emit(sessionId, 'permission.requested', request)
+      })
+    }
+  }
+
+  function resolvePermission(sessionId, permissionId, decision) {
+    const entry = pendingPermissions.get(permissionId)
+    if (!entry || entry.request.sessionId !== sessionId) return false
+    entry[decision]()
+    return true
+  }
+
   /** Runs one tool call against the session's workspace, recording history and events. Never throws for tool failures. */
   async function runTool(sessionId, call, signal) {
     const session = sessions.get(sessionId)
@@ -156,7 +214,7 @@ export function createAgentRuntime({
       emit(sessionId, 'tool.failed', { toolCallId: call.id, tool: call.name, durationMs: 0, error: result.error })
     } else {
       result = await toolExecutor.execute({
-        workspace, call, signal,
+        workspace, call, signal, authorize: authorizeFor(sessionId, signal),
         emit: (type, data) => {
           emit(sessionId, type, data)
           if (type === 'file.changed') trackChangedFile(sessionId, data)
@@ -506,7 +564,11 @@ export function createAgentRuntime({
       if (outcome.kind === 'completed') {
         const record = finalizeRun(sessionId, run, outcome.outcome)
         sessions.setStatus(sessionId, 'completed')
-        emit(sessionId, 'session.completed', { turns: sessions.get(sessionId).turns.length, outcome: record.outcome, runId: record.id })
+        const final = sessions.get(sessionId)
+        emit(sessionId, 'session.completed', {
+          turns: final.turns.length, outcome: record.outcome, runId: record.id,
+          unresolvedFailures: (final.validation?.unresolved ?? []).length, warnings: record.warnings.length,
+        })
       } else {
         finalizeRun(sessionId, run, 'failed')
         commitAssistantText(sessionId, outcome.notice)
@@ -537,7 +599,7 @@ export function createAgentRuntime({
     if (session.status === 'cancelled') return session
     for (const c of toolControllers.get(sessionId) ?? []) c.abort()
     const controller = agents.get(sessionId)?.abortController
-    if (controller && session.status === 'running') {
+    if (controller && (session.status === 'running' || session.status === 'waiting_permission')) {
       controller.abort() // the running loop finalizes the cancellation
     } else {
       finishCancelled(sessionId)
@@ -588,11 +650,52 @@ export function createAgentRuntime({
     cancelSession,
     completeSession,
     executeTool,
+    approvePermission: (sessionId, permissionId) => resolvePermission(sessionId, permissionId, 'approve'),
+    denyPermission: (sessionId, permissionId) => resolvePermission(sessionId, permissionId, 'deny'),
+    getPendingPermissions: (sessionId) => [...pendingPermissions.values()].map(e => e.request).filter(r => !sessionId || r.sessionId === sessionId),
+    getPermissionMode: () => permissionMode,
+    setPermissionMode(mode) {
+      if (!isPermissionMode(mode)) throw new Error(`Unknown permission mode: ${mode}`)
+      permissionMode = mode
+      return permissionMode
+    },
+    listSessions: () => sessions.list(),
+    /** Deletes conversation state only (never repository files). Refuses while a run is active. */
+    async deleteSession(sessionId) {
+      const s = sessions.get(sessionId)
+      if (!s) return false
+      if (s.status === 'running' || s.status === 'waiting_permission') {
+        throw createError({ code: 'session_busy', message: 'Stop the running session before deleting it.' })
+      }
+      agents.delete(sessionId)
+      toolControllers.delete(sessionId)
+      await sessions.delete(sessionId)
+      return true
+    },
+    /** Is the configured provider/model usable (credentials, model)? No network request. */
+    checkModel(model) {
+      try {
+        const provider = providers.getProvider(model.provider)
+        if (!model.model) return { ok: false, code: 'configuration_error', reason: 'no_model', message: 'No model is configured.' }
+        provider.validate?.(model.model)
+        return { ok: true }
+      } catch (e) {
+        const msg = String(e?.message ?? '')
+        return { ok: false, code: e?.code ?? 'configuration_error', reason: /api key/i.test(msg) ? 'no_api_key' : /model/i.test(msg) ? 'no_model' : 'unavailable', message: msg }
+      }
+    },
+    listProviders: () => providers.listProviders(),
+    canOpenWorkspaces: () => !!workspaces,
+    listWorkspaces: () => (workspaces ? workspaces.listWorkspaces() : []),
+    async openWorkspace(spec) {
+      if (!workspaces) throw createError({ code: 'configuration_error', message: 'This host cannot open repositories.' })
+      const ws = await workspaces.openWorkspace(spec)
+      return { id: ws.id, root: ws.root, ...ws.metadata }
+    },
     debugContext,
     debugValidation,
     listTools: () => tools.describeTools(),
     getSession: (id) => sessions.get(id),
-    listProviders: () => providers.listProviders(),
     /**
      * subscribe(listener) for all sessions, or subscribe(sessionId, listener) for one.
      * @returns {()=>void} unsubscribe

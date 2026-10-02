@@ -18,6 +18,7 @@ export const EVENT_TYPES = Object.freeze([
   'command.output',
   'command.completed',
   'permission.requested',
+  'permission.resolved',
   'validation.started',
   'validation.completed',
   'completion.warning',

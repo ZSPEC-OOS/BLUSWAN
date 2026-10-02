@@ -2,7 +2,7 @@
 // Contains no tool logic; every operation lives in a tool definition or the workspace.
 import { validateInput } from './validate.js'
 import { checkPermission, DEFAULT_POLICY } from './permissions.js'
-import { createToolResult, toolFailure, summarizeInput } from './result.js'
+import { createToolResult, toolFailure, summarizeInput, summarizeOutput } from './result.js'
 import { isWorkspaceError } from '../workspace/errors.js'
 import { newId } from '../protocol/schemas.js'
 import { resolveLimits } from '../config/runtimeConfig.js'
@@ -17,7 +17,7 @@ export function createToolExecutor({ registry, policy = DEFAULT_POLICY, limits =
    *          emit?:(type:string,data:object)=>void}} args
    * @returns {Promise<object>} normalized tool result (never throws for tool failures)
    */
-  async function execute({ workspace, call, signal, emit = () => {} }) {
+  async function execute({ workspace, call, signal, emit = () => {}, authorize = null }) {
     const started = now()
     const toolCallId = call.id ?? `tool_${newId()}`
     const name = call.name
@@ -48,7 +48,17 @@ export function createToolExecutor({ registry, policy = DEFAULT_POLICY, limits =
     if (!validation.ok) return finish(toolFailure(name, 'invalid_input', validation.errors.join('; ')))
 
     const classified = tool.classify ? tool.classify(input) : { effect: tool.permission, reason: null }
-    const decision = checkPermission(classified.effect, classified.reason, policy, { classified: !!tool.classify })
+    // With an `authorize` hook (the runtime's permission modes) approval may be awaited; `prohibited` never passes.
+    if (authorize) {
+      if (classified.effect === 'prohibited') {
+        return finish(toolFailure(name, 'permission_denied', 'This command is blocked by workspace safety policy.', { details: { effect: 'prohibited' }, metadata: { effect: 'prohibited' } }))
+      }
+      const verdict = await authorize({ toolCallId, tool: name, input, effect: classified.effect, reason: classified.reason })
+      if (!verdict.allowed) {
+        return finish(toolFailure(name, verdict.code ?? 'permission_denied', verdict.message ?? 'This action was not allowed.', { details: { effect: classified.effect }, metadata: { effect: classified.effect } }))
+      }
+    }
+    const decision = authorize ? { allowed: true } : checkPermission(classified.effect, classified.reason, policy, { classified: !!tool.classify })
     if (!decision.allowed) {
       return finish(toolFailure(name, decision.prohibited ? 'permission_denied' : 'permission_required', decision.reason, {
         details: { effect: decision.effect }, metadata: { effect: decision.effect },
@@ -60,7 +70,7 @@ export function createToolExecutor({ registry, policy = DEFAULT_POLICY, limits =
       const output = await tool.execute({ workspace, signal, limits: workspace.metadata?.limits ?? limits, toolCallId }, input)
       const changes = tool.changes ? tool.changes(output) : []
       for (const c of changes) emit('file.changed', { toolCallId, tool: name, path: c.path, action: c.change })
-      return finish(createToolResult({ tool: name, ok: true, output, metadata }))
+      return finish(createToolResult({ tool: name, ok: true, output, metadata }), { outputSummary: summarizeOutput(name, output) })
     } catch (e) {
       if (isWorkspaceError(e)) {
         return finish(toolFailure(name, e.code, e.message, { details: e.details, output: e.output, metadata }))

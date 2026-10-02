@@ -94,6 +94,7 @@ test('connect → browse → clone → task branch → code → commit → push 
   // the finished conversation is still in history
   await openSidebar(page)
   await expect(page.getByRole('navigation', { name: 'Conversation list' })).toContainText('Fix add please')
+  await expect(page.getByRole('navigation', { name: 'Conversation list' })).toContainText('PR #1 — merged') // the PR stays attached to the finished conversation
 })
 
 test('GitHub failures are shown and recoverable: clone failure, push rejection', async ({ page, request }) => {

@@ -24,7 +24,7 @@ import './shell.css'
 
 export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = '' }) {
   const { snapshot, store } = useBluswan()
-  const { store: gh } = useGithub()
+  const { store: gh, snapshot: ghSnap } = useGithub()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [diagOpen, setDiagOpen] = useState(false)
@@ -63,6 +63,12 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = 
   const runBusy = !!snapshot.active?.composer?.busy
   const online = snapshot.connection.state === 'online'
   useEffect(() => { gh?.notifyContextChanged() }, [gh, wsId, online, runBusy, snapshot.activeId])
+  // pull request association shown next to the conversations that ran on a task branch
+  const badges = useMemo(() => {
+    const map = {}
+    for (const t of ghSnap?.tasks ?? []) for (const id of t.sessionIds ?? []) map[id] = t.pullRequest ? `PR #${t.pullRequest.number} — ${t.pullRequest.state}` : t.taskBranch
+    return map
+  }, [ghSnap?.tasks])
   const select = useCallback((id) => { store.selectSession(id); setSidebarOpen(false) }, [store])
   const send = useCallback((text) => store.sendMessage(text).ok, [store])
   const closeSettings = useCallback(() => setSettingsOpen(false), [])
@@ -93,7 +99,7 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = 
     <ActivityLinksContext.Provider value={links}>
     <div className="shell">
       <SessionSidebar
-        sessions={snapshot.sessions} activeId={snapshot.activeId} open={sidebarOpen} onClose={() => setSidebarOpen(false)}
+        badges={badges} sessions={snapshot.sessions} activeId={snapshot.activeId} open={sidebarOpen} onClose={() => setSidebarOpen(false)}
         onNew={() => { store.newSession(); setSidebarOpen(false) }} onRepositories={gh ? () => { gh.openPanel('home'); setSidebarOpen(false) } : undefined} onSelect={select} onDelete={(id, opts) => store.deleteSession(id, opts)}
       />
       <div className="shell__main">

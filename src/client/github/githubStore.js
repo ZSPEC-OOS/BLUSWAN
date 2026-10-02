@@ -104,6 +104,7 @@ export function createGithubStore({ runtime, workspaceId, canAct = () => true, r
       const data = await api.git(id)
       if (workspaceId() !== id) return
       set({ git: { workspaceId: id, loading: false, data, error: null } })
+      loadTasks()
       schedulePoll(data)
       if (data.stage === 'waiting_for_merge' && data.task?.pullRequest) refreshPr(true)
     } catch (e) { set({ git: { workspaceId: id, loading: false, data: s.git.workspaceId === id ? s.git.data : null, error: errOf(e) } }) }

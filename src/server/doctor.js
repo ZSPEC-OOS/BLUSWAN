@@ -2,7 +2,13 @@
 // default (no provider is contacted, nothing billable). Secrets are never printed — only whether they are set.
 import fs from 'node:fs/promises'
 import { parseServerConfig } from './config.js'
+import crypto from 'node:crypto'
+import os from 'node:os'
+import path from 'node:path'
+import { execFile } from 'node:child_process'
 import { createFilePersistence } from '../persistence/adapters/filePersistence.js'
+import { createGithubApi } from './github/api.js'
+import { createAppAuth, normalizePem } from './github/appAuth.js'
 import { APP_VERSION, PROTOCOL_VERSION } from '../protocol/version.js'
 
 const LOOPBACK = /^(localhost|127(\.\d+){3}|\[?::1\]?)$/i
@@ -62,6 +68,33 @@ export async function runDoctor({ env = process.env, url, token = env.BLUSWAN_DO
     try { await createFilePersistence({ dir: settings.dataDir }).probe(); checks.push(pass('persistence', 'Persistence directory is writable')) } catch { checks.push(fail('persistence', 'Persistence directory is not writable', '', 'Check BLUSWAN_DATA_DIR and its permissions.')) }
   } else if (settings.persistence === 'memory') checks.push(warn('persistence', 'Persistence is in memory', 'Conversations are lost when the runtime restarts.', 'Use BLUSWAN_PERSISTENCE=file or firebase for anything beyond experiments.'))
   else checks.push(skip('persistence', 'Firestore persistence is verified by the runtime readiness check below'))
+
+  // 4b. git and repository cloning (needed for the GitHub workflow; harmless otherwise)
+  const gitVersion = await new Promise((resolve) => execFile('git', ['--version'], { timeout: 5000 }, (err, out) => resolve(err ? null : out.trim())))
+  checks.push(gitVersion ? pass('git', `git is available (${gitVersion.replace(/^git version /, '')})`) : fail('git', 'The git executable was not found', '', 'Install git on the runtime host; repositories cannot be cloned or inspected without it.'))
+  if (settings.github.configured || settings.roots.length) {
+    const target = settings.roots[0] ?? os.homedir()
+    try {
+      const probe = await fs.mkdtemp(path.join(target, '.bluswan-doctor-')); try { await new Promise((resolve, reject) => execFile('git', ['init', '-q', '--bare', probe], { timeout: 10_000 }, (e) => (e ? reject(e) : resolve()))) } finally { await fs.rm(probe, { recursive: true, force: true }) }
+      checks.push(pass('clone-root', 'Workspace root is writable and can hold clones'))
+    } catch { checks.push(fail('clone-root', 'Cannot create repositories under the first workspace root', '', 'Check that BLUSWAN_WORKSPACE_ROOTS exists, is writable by the runtime user and is on persistent storage.')) }
+  }
+
+  // 4c. GitHub (optional): configuration, credentials and reachability. Read-only; nothing is printed that is secret.
+  if (!settings.github.configured) {
+    checks.push(skip('github', 'GitHub integration is not configured (optional)', 'Local repositories work without it. See docs/GITHUB.md to enable repository browsing, pull requests and cleanup.'))
+  } else {
+    checks.push(pass('github', 'GitHub integration is configured', settings.github.webhook ? 'webhook signature verification enabled' : 'no webhook secret: merges are detected by refresh and polling'))
+    let keyOk = true
+    try { crypto.createPrivateKey(normalizePem(env.GITHUB_APP_PRIVATE_KEY)) } catch { keyOk = false; checks.push(fail('github-key', 'GITHUB_APP_PRIVATE_KEY is not a valid private key', '', 'Paste the PEM downloaded from the GitHub App settings (\\n escapes are accepted).')) }
+    const api = createGithubApi({ apiUrl: settings.github.apiUrl, fetch: fetchImpl, timeoutMs: 8000 })
+    try { await api.request('GET', '/rate_limit'); checks.push(pass('github-api', `GitHub API reachable (${new URL(settings.github.apiUrl).host})`)) } catch (e) { checks.push(fail('github-api', 'GitHub API is not reachable', e.message, 'Check outbound network access from the runtime host.')) }
+    if (keyOk) {
+      try { const app = (await api.request('GET', '/app', { token: createAppAuth({ appId: env.GITHUB_APP_ID, privateKey: env.GITHUB_APP_PRIVATE_KEY, api }).jwt() })).json; checks.push(pass('github-credentials', `GitHub App credentials are valid${app?.slug ? ` (${app.slug})` : ''}`)) } catch (e) {
+        checks.push(fail('github-credentials', 'GitHub rejected the App credentials', e.code === 'github_auth_expired' ? 'Unauthorized.' : e.message, 'Check GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY belong to the same GitHub App.'))
+      }
+    }
+  }
 
   // 5. runtime reachable
   const base = (url || env.BLUSWAN_API_URL || env.VITE_BLUSWAN_API_URL || `http://${settings.host === '0.0.0.0' ? '127.0.0.1' : settings.host}:${settings.port}`).replace(/\/+$/, '')

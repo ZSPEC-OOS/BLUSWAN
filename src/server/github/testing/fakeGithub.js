@@ -71,6 +71,8 @@ export async function startFakeGithub({ repos = [{ owner: 'acme', name: 'widgets
       const code = body?.code; if (!state.codes.has(code)) return send(200, { error: 'bad_verification_code' })
       return send(200, { access_token: 'ghu_fakeusertoken0000000000000000', token_type: 'bearer' })
     }
+    if (p === '/app') return send(200, { slug: 'bluswan-test', name: 'BLUSWAN Test' })
+    if (p === '/rate_limit') return send(200, { resources: {} })
     if (p === '/user/installations') return send(200, { total_count: 1, installations: [{ id: installationId, account: { login, type: 'User' } }] })
     if (p === '/user') return send(200, { login })
     if (p === '/installation/repositories') {

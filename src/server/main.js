@@ -85,7 +85,7 @@ export async function startServer({ env = process.env, injected = {}, print = ()
   const address = `${settings.host}:${port}`
   const summary = startupSummary({ settings, address })
   print(`BLUSWAN ${summary.version} (protocol ${summary.protocolVersion}) listening on http://${address}`)
-  print(`  auth: ${summary.auth} · persistence: ${summary.persistence} · workspace roots: ${summary.workspaceRoots} · providers configured: ${summary.providersConfigured.join(', ') || 'none'}`)
+  print(`  auth: ${summary.auth} · persistence: ${summary.persistence} · workspace roots: ${summary.workspaceRoots} · providers configured: ${summary.providersConfigured.join(', ') || 'none'} · github: ${settings.github.configured ? (settings.github.webhook ? 'on (webhooks)' : 'on') : 'off'}`)
   for (const w of warnings) print(`  warning: ${w}`)
 
   let closing = null

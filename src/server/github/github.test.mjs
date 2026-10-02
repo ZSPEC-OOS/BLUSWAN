@@ -450,3 +450,32 @@ describe('ownership, webhooks, agent context, local-only workspaces', () => {
     assert.equal((await A('POST', `/api/workspaces/${ws.id}/push`)).json.error.code, 'github_not_connected')
   })
 })
+
+describe('configuration and GitHub App authentication', () => {
+  const FULL = { GITHUB_APP_ID: '1', GITHUB_APP_PRIVATE_KEY: '-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----', GITHUB_APP_CLIENT_ID: 'c', GITHUB_APP_CLIENT_SECRET: 's3cret', GITHUB_APP_SLUG: 'bluswan', GITHUB_APP_WEBHOOK_SECRET: 'w' }
+  it('is optional, all-or-nothing, validated, and never copies secret values into settings', async () => {
+    const { parseServerConfig } = await import('../config.js')
+    assert.equal(parseServerConfig({}).settings.github.configured, false); assert.equal(parseServerConfig({}).ok, true)
+    const partial = parseServerConfig({ GITHUB_APP_ID: '1' }); assert.equal(partial.ok, false); assert.match(partial.errors[0], /GITHUB_APP_PRIVATE_KEY/)
+    const ok = parseServerConfig(FULL); assert.equal(ok.ok, true); assert.equal(ok.settings.github.configured, true); assert.equal(ok.settings.github.webhook, true)
+    assert.doesNotMatch(JSON.stringify(ok), /s3cret|BEGIN/)
+    assert.match(parseServerConfig({ ...FULL, GITHUB_APP_PRIVATE_KEY: 'nonsense' }).errors.join(), /PEM/)
+    assert.match(parseServerConfig({ ...FULL, GITHUB_API_URL: 'http://api.example.com' }).errors.join(), /https/)
+    assert.equal(parseServerConfig({ ...FULL, GITHUB_API_URL: 'http://127.0.0.1:9999' }).ok, true, 'loopback http is allowed for local fakes')
+    assert.match(parseServerConfig({ ...FULL, GITHUB_APP_WEBHOOK_SECRET: '' }).warnings.join(), /webhook/i)
+  })
+  it('signs a short-lived RS256 JWT and caches installation tokens until shortly before expiry', async () => {
+    const fake = await startFakeGithub(); cleanups.push(() => fake.close())
+    const pair = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 }); const pem = pair.privateKey.export({ type: 'pkcs8', format: 'pem' })
+    let t = Date.now(); const auth = createAppAuth({ appId: 77, privateKey: pem.replace(/\n/g, '\\n'), api: createGithubApi({ apiUrl: fake.url }), now: () => t })
+    const [h, p, sig] = auth.jwt().split('.'); const claims = JSON.parse(Buffer.from(p, 'base64url').toString())
+    assert.equal(JSON.parse(Buffer.from(h, 'base64url').toString()).alg, 'RS256'); assert.equal(claims.iss, '77'); assert.ok(claims.exp - claims.iat <= 10 * 60 + 60)
+    assert.equal(crypto.createVerify('RSA-SHA256').update(`${h}.${p}`).verify(pair.publicKey, Buffer.from(sig, 'base64url')), true)
+    const a = await auth.installationToken(1); const b = await auth.installationToken(1); assert.equal(a, b); assert.equal(fake.state.tokens, 1)
+    t += 59 * 60_000; await auth.installationToken(1); assert.equal(fake.state.tokens, 2, 'refreshed before it expires')
+  })
+  it('webhook endpoint does not exist unless a webhook secret is configured', async () => {
+    const w = await world(); w.github.settings.webhook = false; await w.restart()
+    const r = await fetch(`${w.server.base}/api/github/webhook`, { method: 'POST', body: '{}' }); assert.equal(r.status, 404)
+  })
+})

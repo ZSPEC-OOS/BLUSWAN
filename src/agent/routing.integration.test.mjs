@@ -209,8 +209,15 @@ describe('escalation', () => {
     assert.match(failed.data.error.message, /needs Pro.*unavailable/i)
     assert.equal(session.toolCalls.length, 3) // completed work/evidence is preserved; nothing is replayed
     assert.deepEqual(
-      [session.runs[0].route.initialTier, session.runs[0].route.finalTier, session.runs[0].route.escalated, session.runs[0].route.escalationReason],
-      ['fast', 'fast', false, null],
+      [
+        session.runs[0].route.initialTier,
+        session.runs[0].route.finalTier,
+        session.runs[0].route.escalated,
+        session.runs[0].route.escalationReason,
+        session.runs[0].route.escalationRequired,
+        session.runs[0].route.escalationFailureReason,
+      ],
+      ['fast', 'fast', false, 'repeated_tool_failures', true, 'advanced_unavailable'],
     )
   })
 

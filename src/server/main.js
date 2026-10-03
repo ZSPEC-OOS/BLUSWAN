@@ -86,6 +86,7 @@ export async function startServer({ env = process.env, injected = {}, print = ()
   const summary = startupSummary({ settings, address })
   print(`BLUSWAN ${summary.version} (protocol ${summary.protocolVersion}) listening on http://${address}`)
   print(`  auth: ${summary.auth} · persistence: ${summary.persistence} · workspace roots: ${summary.workspaceRoots} · providers configured: ${summary.providersConfigured.join(', ') || 'none'} · github: ${settings.github.configured ? (settings.github.webhook ? 'on (webhooks)' : 'on') : 'off'}`)
+  if (settings.routing?.configured) print(`  routing: default ${settings.routing.defaultMode} · Flash=${settings.routing.profiles.fast.provider}/${settings.routing.profiles.fast.model} · Pro=${settings.routing.profiles.advanced.provider}/${settings.routing.profiles.advanced.model}`)
   for (const w of warnings) print(`  warning: ${w}`)
 
   let closing = null

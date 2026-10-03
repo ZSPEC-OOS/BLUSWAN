@@ -31,3 +31,24 @@ export function modelGroups(models, current = null) {
   }
   return [...groups.values()]
 }
+
+const TIER_NAME = { fast: 'Flash', advanced: 'Pro' }
+const MODE_NAME = { auto: 'Auto', fast: 'Flash', advanced: 'Pro' }
+export const modeName = (mode) => MODE_NAME[mode] ?? 'Model'
+
+/** Per-run indicator text: "Auto · Flash", "Auto · Pro", "Flash", "Pro". Escalation is shown as a separate note. */
+export function routeLabel(mode, tier) {
+  return mode === 'auto' ? `Auto · ${TIER_NAME[tier] ?? 'Model'}` : (TIER_NAME[tier] ?? MODE_NAME[mode] ?? 'Model')
+}
+
+const MODE_COPY = {
+  auto: { title: 'Auto', hint: 'Recommended. BLUSWAN chooses Flash or Pro for each request.' },
+  fast: { title: 'Flash', hint: 'Fast and economical. Always uses Flash.' },
+  advanced: { title: 'Pro', hint: 'Deeper reasoning for hard work. Always uses Pro.' },
+}
+
+/** The Auto / Flash / Pro choices the server says it can run (all three are listed so a missing one can explain itself). */
+export function modeOptions(routing) {
+  if (!routing?.modes?.length) return []
+  return routing.modes.map(m => ({ id: m.id, title: MODE_COPY[m.id]?.title ?? m.label, hint: m.available ? MODE_COPY[m.id]?.hint : 'Not available on this server.', recommended: m.id === 'auto', available: !!m.available }))
+}

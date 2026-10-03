@@ -1,6 +1,7 @@
 // Centralized runtime configuration, read by the server and CLI from the process environment (BLUSWAN_* tuning,
 // provider variables). Nothing here is read from VITE_* variables: those are compiled into the public web bundle.
 // Credentials are never logged.
+import { parseRoutingEnv } from './routingConfig.js'
 
 const DEFAULTS = Object.freeze({
   defaultProvider: 'deepseek',
@@ -111,6 +112,7 @@ export function loadRuntimeConfig(env = readEnv()) {
     limits[key] = int(env[envKey], fallback)
   }
   const deepseekModel = env.DEEPSEEK_MODEL || ''
+  const routing = parseRoutingEnv(env)
   return Object.freeze({
     defaultProvider: env.BLUSWAN_PROVIDER || DEFAULTS.defaultProvider,
     defaultModel: env.BLUSWAN_MODEL || deepseekModel,
@@ -128,6 +130,7 @@ export function loadRuntimeConfig(env = readEnv()) {
     limits: Object.freeze(limits),
     ...context,
     ...validation,
+    routing: Object.freeze(routing),
     devLogging: env.BLUSWAN_DEV_LOGGING === 'true' || !!env.DEV,
     providers: Object.freeze({
       kimi: Object.freeze({ apiKey: env.KIMI_API_KEY || '', baseUrl: env.KIMI_BASE_URL || 'https://api.moonshot.ai/v1', model: env.KIMI_MODEL || '' }),

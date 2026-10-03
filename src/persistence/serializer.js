@@ -2,7 +2,7 @@
 // process handles, stream readers, callbacks or provider clients (the runtime session object never holds
 // them, and the validator below rejects functions/symbols anyway). Secrets are scrubbed before anything is written.
 import { CURRENT_SCHEMA_VERSION, persistenceError } from './persistence.js'
-import { isValidSession, SESSION_STATUSES } from '../protocol/schemas.js'
+import { isValidSession, isModelMode, SESSION_STATUSES } from '../protocol/schemas.js'
 import { redactSecrets } from '../utils/redact.js'
 import { deriveTitle } from '../utils/title.js'
 
@@ -62,6 +62,7 @@ export function serializeSession(session, { userId, commands = [], workspaceSnap
     id: session.id, userId, workspaceId: session.workspaceId ?? null,
     title: title ?? deriveTitle(firstUser).slice(0, LIMITS.maxTitleChars),
     model: { provider: session.model.provider, model: session.model.model },
+    modelPreference: isModelMode(session.modelPreference) ? session.modelPreference : null,
     status: session.status,
     messages: session.messages.map(compactMessage),
     events: compactEvents(session.events),
@@ -109,6 +110,7 @@ export function validateRecord(r) {
   if (typeof r.userId !== 'string' || r.userId === '') bad('userId')
   if (!SESSION_STATUSES.includes(r.status)) bad('status')
   if (!r.model || typeof r.model.provider !== 'string' || typeof r.model.model !== 'string') bad('model')
+  if (r.modelPreference != null && !isModelMode(r.modelPreference)) bad('modelPreference')
   for (const k of ['messages', 'events', 'toolCalls', 'turns', 'runs', 'changedFiles', 'commands']) if (!isArr(r[k])) bad(k)
   if (!r.messages.every(m => m && typeof m.id === 'string' && typeof m.role === 'string' && typeof m.content === 'string')) bad('messages')
   if (!r.events.every(e => e && typeof e.id === 'string' && typeof e.type === 'string' && typeof e.sessionId === 'string' && e.data && typeof e.data === 'object')) bad('events')
@@ -121,6 +123,7 @@ export function validateRecord(r) {
 export function toRuntimeSession(record) {
   const session = {
     id: record.id, workspaceId: record.workspaceId ?? null, model: record.model,
+    modelPreference: isModelMode(record.modelPreference) ? record.modelPreference : null, // absent in pre-routing records → manual
     messages: record.messages, events: record.events, toolCalls: record.toolCalls, changedFiles: record.changedFiles,
     turns: record.turns, runs: record.runs, validation: record.validationState ?? null, status: record.status,
     contextSummary: record.contextSummary ?? null, tokenUsage: record.tokenUsage,

@@ -42,6 +42,14 @@ npm run test:deepseek ; npm run test:kimi ; npm run test:openai ; npm run test:a
 
 Record **PASS**, **FAILED** or **NOT RUN** (no credentials) per provider. Offline contract tests do not prove live behaviour.
 
+Routing (only if the deployment enables it) — run and record **separately**:
+
+```bash
+npm run test:deepseek-flash ; npm run test:deepseek-pro ; npm run eval:routing
+```
+
+`deepseek-flash` and `deepseek-v4-pro` must each be recorded on their own; a pass for one says nothing about the other. Also confirm with `npm run doctor` that the routing check passes and that `GET /api/bootstrap` (as a signed-in user) lists only profile ids, labels, providers and models.
+
 ## Regression greps (expected: no matches in active code)
 
 ```bash

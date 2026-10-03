@@ -45,3 +45,26 @@ describe('evaluation harness', () => {
     assert.equal(results.length, 2)
   })
 })
+
+describe('routing comparison', () => {
+  it('runs the same tasks forced Flash, forced Pro and Auto, recording the route taken and raw outcomes', async () => {
+    const { runRoutingComparison, formatRoutingComparison } = await import('./routingEval.js')
+    const { createRouting } = await import('../agent/routingBridge.js')
+    const { parseRoutingEnv } = await import('../config/routingConfig.js')
+    const mk = (id) => { const t = TASKS[0].reference(); let n = 0; return createFakeProvider({ id, respond: () => { const x = t[n++] ?? { text: 'done' }; return reply(...(x.text ? [say(x.text)] : []), ...(x.calls ?? []).map(c => call(c.id, c.name, c.input))) } }) }
+    // a fresh provider pair per row so every row starts its script from the beginning
+    const results = []
+    for (const mode of ['fast', 'advanced', 'auto']) {
+      const providers = createProviderRegistry([mk('fake-fast'), mk('fake-pro')])
+      const routing = createRouting({ routing: parseRoutingEnv({ BLUSWAN_FAST_PROVIDER: 'fake-fast', BLUSWAN_FAST_MODEL: 'f', BLUSWAN_ADVANCED_PROVIDER: 'fake-pro', BLUSWAN_ADVANCED_MODEL: 'p' }, { knownProviders: ['fake-fast', 'fake-pro'] }), providers, isConfigured: () => true })
+      results.push(...await runRoutingComparison({ tasks: [TASKS[0]], routing, providers, modes: [mode], config }))
+    }
+    assert.deepEqual(results.map(r => r.mode), ['fast', 'advanced', 'auto'])
+    assert.ok(results.every(r => r.success), JSON.stringify(results.map(r => [r.mode, r.success])))
+    assert.deepEqual(results.slice(0, 2).map(r => r.route.finalTier), ['fast', 'advanced'])
+    assert.ok(['fast', 'advanced'].includes(results[2].route.finalTier))
+    assert.deepEqual(results.map(r => r.route.requestedMode), ['fast', 'advanced', 'auto'])
+    const text = formatRoutingComparison(results)
+    assert.match(text, /task\s+mode\s+result\s+route/); assert.doesNotMatch(text, /winner|rank|score/i)
+  })
+})

@@ -32,6 +32,7 @@ From a terminal instead: `npm run agent -- --workspace ../my-repo "Fix the faili
 | Variable | Purpose |
 |---|---|
 | `DEEPSEEK_*`, `KIMI_*`, `OPENAI_*`, `ANTHROPIC_*` | `_API_KEY`, `_MODEL`, `_BASE_URL` per provider ([docs/PROVIDERS.md](docs/PROVIDERS.md)) |
+| `BLUSWAN_MODEL_MODE`, `BLUSWAN_FAST_*`, `BLUSWAN_ADVANCED_*` | Adaptive Intelligence Routing: default mode (`auto`/`flash`/`pro`) and the Flash and Pro profiles (`_PROVIDER`, `_MODEL`, `_REASONING_EFFORT`). Absent = manual model selection only ([docs/ROUTING.md](docs/ROUTING.md)) |
 | `BLUSWAN_AUTH` | `none` (one local user, loopback only) or `firebase` (verify Firebase ID tokens; needs `FIREBASE_PROJECT_ID`) |
 | `BLUSWAN_PERSISTENCE`, `BLUSWAN_DATA_DIR` | `file` (default, `.bluswan/data`), `memory`, or `firebase` (Firestore via `firebase-admin`) |
 | `BLUSWAN_WORKSPACE_ROOTS` | Folders repositories may be opened under (required with authentication) |
@@ -80,9 +81,11 @@ On phones the interface is conversation-first: ☰ Workspace (repositories, Git,
 | `npm run test:e2e` | Builds the app and runs the browser suite (Chromium, desktop + phone viewport) against the real runtime with a scripted model — offline, free |
 | `npm run test:release` | `npm test` + lint + build + browser suite (no live providers) — the [release checklist](docs/RELEASE_CHECKLIST.md) gate |
 | `npm run test:deepseek` · `test:kimi` · `test:openai` · `test:anthropic` | Optional live smoke test per provider (needs credentials) |
+| `npm run test:deepseek-flash` · `test:deepseek-pro` | Optional live smoke tests of the Flash and Pro profiles, run separately (need `DEEPSEEK_API_KEY`) |
+| `npm run eval:routing` | Optional live comparison: the same tasks forced Flash, forced Pro and Auto, raw outcomes only |
 | `npm run eval -- --provider <id>` | Optional live coding evaluation with raw metrics |
 
-More: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) (setup, test matrix, evaluation, dogfooding) · [`docs/GITHUB.md`](docs/GITHUB.md) · [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) · [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) · [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) · [`docs/PROVIDERS.md`](docs/PROVIDERS.md) · [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`docs/SECURITY.md`](docs/SECURITY.md).
+More: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) (setup, test matrix, evaluation, dogfooding) · [`docs/GITHUB.md`](docs/GITHUB.md) · [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) · [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) · [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) · [`docs/PROVIDERS.md`](docs/PROVIDERS.md) · [`docs/ROUTING.md`](docs/ROUTING.md) · [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`docs/SECURITY.md`](docs/SECURITY.md).
 
 ## Architecture in one picture
 

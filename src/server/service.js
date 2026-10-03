@@ -12,6 +12,8 @@ import { createSessionAutosave } from '../sessions/sessionStore.js'
 import { createSessionHydrator } from '../sessions/sessionHydrator.js'
 import { deriveTitle } from '../utils/title.js'
 import { createProviderRegistry, createStandardProviders } from '../providers/registry.js'
+import { createRouting } from '../agent/routingBridge.js'
+import { normalizeMode } from '../routing/profiles.js'
 import { isCodingCapable } from '../providers/capabilities.js'
 import { createNodeWorkspaceManager } from '../workspace/node.js'
 import { snapshotWorkspace, restoreWorkspace } from '../workspace/workspaceRestore.js'
@@ -28,7 +30,7 @@ const SENDABLE = new Set(['idle', 'completed', 'cancelled', 'error', 'waiting_us
 
 /** Everything a client needs to render a session's status without the transcript. */
 export const liteSession = (s) => ({
-  id: s.id, status: s.status, workspaceId: s.workspaceId, model: s.model, changedFiles: s.changedFiles,
+  id: s.id, status: s.status, workspaceId: s.workspaceId, model: s.model, modelPreference: s.modelPreference ?? null, changedFiles: s.changedFiles,
   validation: s.validation, tokenUsage: s.tokenUsage, startedAt: s.startedAt, updatedAt: s.updatedAt,
 })
 
@@ -59,8 +61,11 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
         // credentials are read per request, on the server, and handed only to the adapter
         getConfig: (id) => ({ ...getProviderConfig(id, config), ...(credentials.hasCredential(id, user) ? credentials.getCredential(id, user) : { apiKey: '' }) }),
       })
+      const registry = createProviderRegistry(adapters)
+      // Adaptive routing is per user because availability depends on the credentials this user can use.
+      const routing = createRouting({ routing: config.routing, providers: registry, isConfigured: (p) => credentials.hasCredential(p, user) })
       const runtime = createAgentRuntime({
-        providers: createProviderRegistry(adapters), sessions: createSessionManager(), workspaces, approvals: 'interactive',
+        routing, providers: registry, sessions: createSessionManager(), workspaces, approvals: 'interactive',
         workspaceNotes: (workspaceId) => service.github.agentNotes(user, workspaceId),
         config: { ...config, permissionMode: settings.permissionMode },
       })
@@ -77,7 +82,7 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
       const workspaceRepo = createWorkspaceRepository(persistence, { userId: user.id })
       // repositories this user opened on this host come back attached; others stay listed as "reconnect"
       await Promise.all((await workspaceRepo.list().catch(() => [])).map(r => restoreWorkspace(r, { workspaces, hostId }).catch(() => null)))
-      return { user, runtime, workspaces, autosave, hydrator, hydrating, listeners, broadcast, settings, settingsRepo, workspaceRepo }
+      return { user, runtime, routing, workspaces, autosave, hydrator, hydrating, listeners, broadcast, settings, settingsRepo, workspaceRepo }
     })()
   }
   const ctxOf = (user) => {
@@ -101,6 +106,16 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
     const first = described.find(p => p.configured && p.model) ?? described.find(p => p.configured)
     return first ? pick(first.provider, first.model) : pick(config.defaultProvider, config.defaultModel)
   }
+
+  /** What a new session starts with: the user's saved mode, else the server default — only when that mode can run. */
+  function defaultPreference(ctx) {
+    const r = ctx.routing
+    if (!r?.available) return null
+    if (ctx.settings.modelMode === 'manual') return null
+    const wanted = ctx.settings.modelMode || r.defaultMode
+    return wanted && r.public.modes.find(m => m.id === wanted)?.available ? wanted : null
+  }
+  const routingInfo = (ctx) => ctx.routing?.public ?? { available: false, configured: false, defaultMode: null, modes: [], profiles: [] }
 
   const notFound = (what = 'session') => createError({ code: 'not_found', message: `That ${what} was not found.` })
 
@@ -148,7 +163,7 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
     async bootstrap(user) {
       const ctx = await ctxOf(user)
       return {
-        user, hostId, providers: credentials.describe(user), models: modelCatalog(ctx, user), defaultModel: defaultModel(ctx, user), settings: ctx.settings, permissionMode: ctx.runtime.getPermissionMode(),
+        user, hostId, providers: credentials.describe(user), models: modelCatalog(ctx, user), defaultModel: defaultModel(ctx, user), routing: { ...routingInfo(ctx), preferredMode: defaultPreference(ctx) }, settings: ctx.settings, permissionMode: ctx.runtime.getPermissionMode(),
         workspaces: await service.github.decorate(user, await listWorkspaces(ctx)), canOpenWorkspaces: true, sessions: await service.listSessions(user, {}),
       }
     },
@@ -167,7 +182,7 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
       return { items: [...items.values()].sort((a, b) => b.lastActivityAt - a.lastActivityAt), nextCursor: page.nextCursor }
     },
 
-    async createSession(user, { workspaceId = null, model, id } = {}) {
+    async createSession(user, { workspaceId = null, model, id, modelMode } = {}) {
       const ctx = await ctxOf(user)
       if (id !== undefined && (typeof id !== 'string' || !/^[A-Za-z0-9_-]{8,100}$/.test(id) || ctx.runtime.getSession(id) || await persistence.loadSession(user.id, id).catch(() => null))) {
         throw createError({ code: 'invalid_request', message: 'That session id is not available.' })
@@ -175,8 +190,12 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
       if (workspaceId && !ctx.workspaces.getWorkspace(workspaceId)) throw createError({ code: 'workspace_not_found', message: 'That repository is not connected.' })
       if (ctx.runtime.listSessions().length >= maxLiveSessions) throw createError({ code: 'too_many_requests', message: 'Too many open conversations. Delete some before starting another.' })
       const chosen = model?.model ? { provider: model.provider, model: model.model } : defaultModel(ctx, user)
+      // An explicit provider/model from the client is a manual choice; otherwise new sessions follow the routing preference.
+      const requested = modelMode === 'manual' ? null : normalizeMode(modelMode)
+      const preference = modelMode !== undefined ? requested : model?.model ? null : defaultPreference(ctx)
       const s = ctx.runtime.startSession({ workspaceId, model: chosen, id })
-      return { session: service.snapshot(s), persistence: 'unsaved' }
+      if (preference) { try { ctx.runtime.setModelPreference(s.id, preference) } catch { /* the requested mode cannot run here: the session stays on its manual model */ } }
+      return { session: service.snapshot(ctx.runtime.getSession(s.id)), persistence: 'unsaved' }
     },
 
     /** Full client snapshot of one session (the client rebuilds the transcript from events). */
@@ -206,7 +225,16 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
     async setModel(user, id, model) {
       const ctx = await ctxOf(user)
       await requireSession(ctx, id)
-      return { model: ctx.runtime.setSessionModel(id, model) }
+      if (model && model.mode !== undefined) { // routing mode: auto | flash | pro
+        const mode = normalizeMode(model.mode)
+        if (!mode) throw createError({ code: 'invalid_request', message: 'Choose Auto, Flash or Pro.' })
+        const result = ctx.runtime.setModelPreference(id, mode)
+        await service.saveSettings(user, { modelMode: mode }) // the choice also becomes the default for new conversations
+        return result
+      }
+      const result = { model: ctx.runtime.setSessionModel(id, model), modelPreference: null }
+      await service.saveSettings(user, { modelMode: 'manual' })
+      return result
     },
     async cancel(user, id) { const ctx = await ctxOf(user); await requireSession(ctx, id); return { cancelled: ctx.runtime.cancelSession(id) !== false } },
     async approve(user, id, permissionId) { const ctx = await ctxOf(user); await requireSession(ctx, id); return { ok: ctx.runtime.approvePermission(id, permissionId) } },
@@ -226,7 +254,7 @@ export function createBluswanService({ persistence, credentials, hostId = os.hos
     async getSettings(user) { return { ...(await ctxOf(user)).settings, permissionMode: (await ctxOf(user)).runtime.getPermissionMode() } },
     async saveSettings(user, patch) {
       const ctx = await ctxOf(user)
-      const next = { ...ctx.settings, ...(patch.model !== undefined ? { model: String(patch.model) } : {}), ...(typeof patch.provider === 'string' && ctx.runtime.listProviders().includes(patch.provider) ? { provider: patch.provider } : {}), ...(isPermissionMode(patch.permissionMode) ? { permissionMode: patch.permissionMode } : {}) }
+      const next = { ...ctx.settings, ...(patch.model !== undefined ? { model: String(patch.model) } : {}), ...(typeof patch.provider === 'string' && ctx.runtime.listProviders().includes(patch.provider) ? { provider: patch.provider } : {}), ...(isPermissionMode(patch.permissionMode) ? { permissionMode: patch.permissionMode } : {}), ...(patch.modelMode !== undefined && (patch.modelMode === '' || patch.modelMode === 'manual' || normalizeMode(patch.modelMode)) ? { modelMode: patch.modelMode === '' || patch.modelMode === 'manual' ? patch.modelMode : normalizeMode(patch.modelMode) } : {}) }
       if (isPermissionMode(patch.permissionMode)) ctx.runtime.setPermissionMode(patch.permissionMode)
       await ctx.settingsRepo.save(next)
       ctx.settings = await ctx.settingsRepo.load()

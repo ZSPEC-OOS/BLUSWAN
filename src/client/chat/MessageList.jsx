@@ -6,6 +6,7 @@ import ActivityGroup from '../activity/ActivityGroup.jsx'
 import PermissionPrompt from '../permissions/PermissionPrompt.jsx'
 import ErrorNotice from '../shared/ErrorNotice.jsx'
 import OutcomeLine from '../shared/OutcomeLine.jsx'
+import RouteLine from '../shared/RouteLine.jsx'
 import './chat.css'
 
 const WINDOW = 300
@@ -20,6 +21,7 @@ export const EntryView = memo(function EntryView({ entry, onApprove, onDeny, onO
     case 'notice': return <ErrorNotice tone={entry.tone ?? 'subdued'} text={entry.text} />
     case 'error': return <ErrorNotice tone="error" text={entry.text} details={entry.details} showTechnical={showTechnical} />
     case 'outcome': return <OutcomeLine entry={entry} />
+    case 'route': return <RouteLine entry={entry} />
     default: return null
   }
 })

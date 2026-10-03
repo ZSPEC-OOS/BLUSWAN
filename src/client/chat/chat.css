@@ -20,3 +20,7 @@
 .messages { position: relative; flex: 1; overflow-y: auto; }
 .messages__inner { display: flex; flex-direction: column; gap: .6rem; max-width: 52rem; margin: 0 auto; padding: 1.2rem 1rem 1.5rem; min-height: 100%; }
 .messages__earlier { align-self: center; } .messages__latest { position: sticky; bottom: .75rem; left: 50%; transform: translateX(-50%); box-shadow: 0 2px 12px #0008; }
+
+/* Per-run model indicator: quiet, one line, never competes with the answer */
+.routeline { font-size: .75rem; color: var(--text-muted); padding: .1rem 0; }
+.routeline__note { font-style: italic; }

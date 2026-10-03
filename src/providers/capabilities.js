@@ -5,6 +5,7 @@ export const DEFAULT_CAPABILITIES = Object.freeze({
   streaming: true,
   toolCalling: false,
   reasoning: false,
+  reasoningEffort: false,
   parallelToolCalls: false,
   contextWindow: 8192,
   maxOutputTokens: 2048,

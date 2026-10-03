@@ -28,6 +28,7 @@ export function createRemoteRuntime({
   let providers = []
   let models = []
   let defaultModel = { provider: '', model: '' }
+  let routing = { available: false, configured: false, defaultMode: null, preferredMode: null, modes: [], profiles: [] }
   let permissionMode = 'auto_edit'
   let user = null
   // Connection state machine (see getConnection): starting → checking_server → authenticating → loading_bootstrap →
@@ -77,7 +78,7 @@ export function createRemoteRuntime({
 
   function blank(id, fields = {}) {
     return { id, workspaceId: null, model: { ...defaultModel }, status: 'idle', events: [], messages: [], toolCalls: [], changedFiles: [], runs: [], validation: null,
-      tokenUsage: { ...EMPTY_USAGE }, startedAt: Date.now(), updatedAt: Date.now(), hydrated: false, loading: false, persistence: 'saved', title: null, commands: [], buffered: [], ...fields }
+      tokenUsage: { ...EMPTY_USAGE }, modelPreference: null, startedAt: Date.now(), updatedAt: Date.now(), hydrated: false, loading: false, persistence: 'saved', title: null, commands: [], buffered: [], ...fields }
   }
 
   function applyIndex(item) {
@@ -90,7 +91,7 @@ export function createRemoteRuntime({
   }
 
   function applyLite(s, lite) {
-    Object.assign(s, { status: lite.status, workspaceId: lite.workspaceId, model: lite.model, changedFiles: lite.changedFiles, validation: lite.validation, tokenUsage: lite.tokenUsage, updatedAt: lite.updatedAt })
+    Object.assign(s, { status: lite.status, workspaceId: lite.workspaceId, model: lite.model, modelPreference: lite.modelPreference ?? null, changedFiles: lite.changedFiles, validation: lite.validation, tokenUsage: lite.tokenUsage, updatedAt: lite.updatedAt })
   }
 
   function addEvent(s, event) {
@@ -114,7 +115,7 @@ export function createRemoteRuntime({
       }
     } else if (msg.kind === 'event') {
       let s = sessions.get(msg.sessionId)
-      if (!s) { s = blank(msg.sessionId, { workspaceId: msg.session.workspaceId, model: msg.session.model, startedAt: msg.session.startedAt }); sessions.set(s.id, s) }
+      if (!s) { s = blank(msg.sessionId, { workspaceId: msg.session.workspaceId, model: msg.session.model, modelPreference: msg.session.modelPreference ?? null, startedAt: msg.session.startedAt }); sessions.set(s.id, s) }
       applyLite(s, msg.session)
       if (s.loading) { s.buffered.push(msg.event); return }
       if (!s.hydrated) { touch(s); return } // transcript is loaded when the session is opened
@@ -161,7 +162,7 @@ export function createRemoteRuntime({
   }
 
   function applyBootstrap(data) {
-    user = data.user; providers = data.providers; models = data.models ?? []; defaultModel = data.defaultModel ?? defaultModel; permissionMode = data.permissionMode; workspaces = data.workspaces
+    user = data.user; providers = data.providers; models = data.models ?? []; defaultModel = data.defaultModel ?? defaultModel; routing = data.routing ?? routing; permissionMode = data.permissionMode; workspaces = data.workspaces
     for (const item of data.sessions.items) applyIndex(item)
   }
 
@@ -378,9 +379,12 @@ export function createRemoteRuntime({
     getPersistenceStatus: (id) => sessions.get(id)?.persistence ?? 'saved',
 
     /** Optimistic: the session exists locally at once; the server learns of it with the first message. */
-    startSession({ workspaceId = null, model } = {}) {
+    startSession({ workspaceId = null, model, modelPreference } = {}) {
       const id = uuid()
-      const s = blank(id, { workspaceId, model: model ?? { ...defaultModel }, hydrated: true, draft: true, persistence: 'unsaved' })
+      const mode = modelPreference === undefined ? routing.preferredMode : modelPreference
+      const profile = mode === 'fast' || mode === 'advanced' ? routing.profiles.find(p => p.id === mode) : null
+      const chosen = profile ? { provider: profile.provider, model: profile.model } : (model ?? { ...defaultModel })
+      const s = blank(id, { workspaceId, model: chosen, modelPreference: mode ?? null, hydrated: true, draft: true, persistence: 'unsaved' })
       sessions.set(id, s)
       return s
     },
@@ -389,7 +393,7 @@ export function createRemoteRuntime({
       const s = sessions.get(id)
       if (!s) throw Object.assign(new Error('That conversation is gone.'), { code: 'not_found' })
       if (s.draft) { // register the draft with the server, using the client-chosen id
-        await request('POST', '/api/sessions', { id, workspaceId: s.workspaceId, model: s.model })
+        await request('POST', '/api/sessions', { id, workspaceId: s.workspaceId, model: s.model, modelMode: s.modelPreference ?? 'manual' })
         s.draft = false
       }
       s.status = 'running'; touch(s)
@@ -425,10 +429,21 @@ export function createRemoteRuntime({
     async setSessionModel(id, model) {
       const s = sessions.get(id)
       if (!s) throw Object.assign(new Error('That conversation is gone.'), { code: 'not_found' })
-      if (s.draft) { s.model = { provider: model.provider, model: model.model }; touch(s); return s.model }
+      if (s.draft) { s.model = { provider: model.provider, model: model.model }; s.modelPreference = null; touch(s); return s.model }
       const res = await request('PUT', `/api/sessions/${encodeURIComponent(id)}/model`, model)
-      s.model = res.model; touch(s)
+      s.model = res.model; s.modelPreference = null; touch(s)
       return res.model
+    },
+    getRouting: () => routing,
+    /** Auto / Flash / Pro for the session's NEXT run. Drafts change locally; stored sessions ask the server (it refuses mid-run). */
+    async setSessionMode(id, mode) {
+      const s = sessions.get(id)
+      if (!s) throw Object.assign(new Error('That conversation is gone.'), { code: 'not_found' })
+      const profile = mode === 'fast' || mode === 'advanced' ? routing.profiles.find(p => p.id === mode) : null
+      if (s.draft) { s.modelPreference = mode; if (profile) s.model = { provider: profile.provider, model: profile.model }; touch(s); return { modelPreference: mode, model: s.model } }
+      const res = await request('PUT', `/api/sessions/${encodeURIComponent(id)}/model`, { mode })
+      s.modelPreference = res.modelPreference ?? mode; s.model = res.model ?? s.model; touch(s)
+      return res
     },
     getProviderStatus: () => providers,
 

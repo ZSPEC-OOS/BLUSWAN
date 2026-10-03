@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { MODE_INFO, PERMISSION_MODES } from '../../tools/permissionModes.js'
 import RepositoryOpener from './RepositoryOpener.jsx'
+import ModelModePicker from '../status/ModelModePicker.jsx'
 import './settings.css'
 
 /**
  * Modal settings: model, permission mode, repository, account. Provider credentials are not editable here: they are
  * configured on the BLUSWAN server, and this panel only shows whether a provider is configured.
  */
-export default function SettingsPanel({ settings, providers = [], onSave, permissionMode, onPermissionMode, canOpenWorkspaces, onOpenWorkspace, setup, userEmail, onSignOut, onClose }) {
+export default function SettingsPanel({ settings, providers = [], onSave, permissionMode, onPermissionMode, canOpenWorkspaces, onOpenWorkspace, setup, userEmail, onSignOut, onClose, routing = null, mode = null, onChooseMode = null }) {
   const [draft, setDraft] = useState(() => ({ model: settings.model }))
   const dialog = useRef(null)
 
@@ -25,6 +26,7 @@ export default function SettingsPanel({ settings, providers = [], onSave, permis
 
         <section aria-labelledby="set-model">
           <h3 id="set-model">Model</h3>
+          {routing?.modes?.length && onChooseMode ? <ModelModePicker routing={routing} mode={mode} onChange={onChooseMode} /> : null}
           {providers.map(p => (
             <p key={p.provider} className={`settings__provider ${p.configured ? 'is-ok' : 'is-missing'}`} role="status">
               <strong>{p.label}</strong> {p.configured ? 'configured' : 'not configured'}

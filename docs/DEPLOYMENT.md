@@ -138,6 +138,18 @@ For production mount a disk (for example at `/var/data`) and point `BLUSWAN_WORK
 hard-coded. Set the GitHub App's callback/setup URL to the web app's origin and the webhook URL to `https://<runtime>/api/github/webhook`. Ensure `git` is
 installed in the image and the runtime user can write to the disk; `npm run doctor` verifies both.
 
+## Adaptive Intelligence Routing (optional)
+
+Server-owned configuration; nothing here is read from `VITE_*` variables and the browser never sees a key.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `BLUSWAN_MODEL_MODE` | `auto` | Default mode for new conversations: `auto`, `flash` or `pro` |
+| `BLUSWAN_FAST_PROVIDER` / `_MODEL` / `_REASONING_EFFORT` | `deepseek` / `deepseek-flash` / `high` | The Flash profile |
+| `BLUSWAN_ADVANCED_PROVIDER` / `_MODEL` / `_REASONING_EFFORT` | `deepseek` / `deepseek-v4-pro` / `high` | The Pro profile |
+
+Routing is configured when any of these is set; otherwise BLUSWAN behaves exactly as before (manual model selection). A single `DEEPSEEK_API_KEY` serves both default profiles. Auto is offered only when **both** profiles can run (credentials present, model known and tool-capable); if one cannot, Auto reports why and manual selection keeps working — BLUSWAN never runs the other tier in its place. `npm run doctor` prints the routing profiles (ids only) and whether Auto is available.
+
 ## What the runtime exposes
 
 | Endpoint | Auth | Purpose |

@@ -191,14 +191,34 @@ describe('escalation', () => {
     assert.equal(proP.requests.length, 0)
   })
 
-  it('if Pro cannot run, the run stays on Flash instead of substituting or failing', async () => {
-    const { runtime, fastP, proP, events } = setup({ configured: () => true, fast: { respond: (req, n) => (n <= 3 ? failing(n) : reply(say('flash done'))) }, pro: { validate() { throw new Error('no pro key') } } })
+  it('if Pro becomes unavailable when escalation is required, the run fails clearly and preserves completed work', async () => {
+    const { runtime, fastP, proP, events } = setup({
+      configured: () => true,
+      fast: { respond: (req, n) => failing(n) },
+      pro: { validate() { throw new Error('no pro key') } },
+    })
     const s = start(runtime, 'auto')
     await runtime.sendMessage(s.id, SIMPLE)
+    const session = runtime.getSession(s.id)
+    const failed = types(events, 'session.failed').at(-1)
     assert.equal(types(events, 'model.route.escalated').length, 0)
     assert.equal(proP.requests.length, 0)
-    assert.equal(fastP.requests.length, 4)
-    assert.equal(runtime.getSession(s.id).status, 'completed')
+    assert.equal(fastP.requests.length, 3) // no fourth Flash turn after BLUSWAN decides Pro is required
+    assert.equal(session.status, 'error')
+    assert.equal(failed.data.error.code, 'configuration_error')
+    assert.match(failed.data.error.message, /needs Pro.*unavailable/i)
+    assert.equal(session.toolCalls.length, 3) // completed work/evidence is preserved; nothing is replayed
+    assert.deepEqual(
+      [
+        session.runs[0].route.initialTier,
+        session.runs[0].route.finalTier,
+        session.runs[0].route.escalated,
+        session.runs[0].route.escalationReason,
+        session.runs[0].route.escalationRequired,
+        session.runs[0].route.escalationFailureReason,
+      ],
+      ['fast', 'fast', false, 'repeated_tool_failures', true, 'advanced_unavailable'],
+    )
   })
 
   it('cancelling stops the run with no further provider calls, including after a would-be escalation', async () => {

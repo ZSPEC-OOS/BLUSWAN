@@ -510,10 +510,20 @@ export function createAgentRuntime({
       const provider = providers.getProvider(target.provider)
       provider.validate?.(target.model)
       assertCodingCapable(provider.capabilities(target.model), { provider: target.provider, model: target.model })
-    } catch {
-      run.route.escalationBlocked = true // stays on Flash; nothing else is substituted
-      log.warn('escalation unavailable', { sessionId, reason: verdict.reasonCode })
-      return false
+    } catch (e) {
+      run.route = {
+        ...run.route,
+        escalationRequired: true,
+        escalationFailureReason: 'advanced_unavailable',
+        escalationReason: verdict.reasonCode,
+      }
+      log.warn('escalation required but unavailable', { sessionId, reason: verdict.reasonCode, provider: target?.provider ?? null })
+      throw createError({
+        code: 'configuration_error',
+        provider: target?.provider ?? null,
+        message: 'BLUSWAN determined this request needs Pro, but the Pro profile is unavailable. Work completed so far is preserved. Restore the Pro profile or choose how to continue.',
+        cause: e?.message,
+      })
     }
     const from = run.route.tier
     run.route = { ...run.route, tier: TIERS.ADVANCED, provider: target.provider, model: target.model, reasoningEffort: target.reasoningEffort, escalated: true, escalationReason: verdict.reasonCode }
@@ -539,6 +549,7 @@ export function createAgentRuntime({
     const r = run.route
     return {
       requestedMode: r.mode, initialTier: r.initialTier, finalTier: r.tier, escalated: r.escalated, escalationReason: r.escalationReason ?? null,
+      escalationRequired: !!r.escalationRequired, escalationFailureReason: r.escalationFailureReason ?? null,
       source: r.source, reasonCodes: r.reasonCodes, score: r.score ?? null,
       classifier: r.classifier ? { used: true, outcome: r.classifier.outcome, usage: r.classifier.usage, durationMs: r.classifier.durationMs } : { used: false },
       segments,

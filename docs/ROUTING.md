@@ -57,7 +57,9 @@ At the top of an agent turn — never mid-stream — the runtime checks real evi
 Pro: repeated validation failures after repair attempts, consecutive turns with no progress, or a task that has grown far
 beyond its start (`src/routing/escalation.js`). Provider outages, 429s and a single ordinary failure are *not* evidence;
 those are retry/recovery concerns. History, files, validation and permissions carry over; completed tool calls are never
-replayed. If Pro cannot run, the run stays on Flash. The optional "ask for higher reasoning" model tool is not implemented.
+replayed. If BLUSWAN determines Pro is required but the Pro profile cannot start, the request fails clearly with
+`configuration_error`; completed work is preserved and BLUSWAN does **not** silently continue on Flash. The run record
+marks that escalation was required and why it could not happen. The optional "ask for higher reasoning" model tool is not implemented.
 
 ## Events, persistence and usage
 

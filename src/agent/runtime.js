@@ -549,6 +549,7 @@ export function createAgentRuntime({
     const r = run.route
     return {
       requestedMode: r.mode, initialTier: r.initialTier, finalTier: r.tier, escalated: r.escalated, escalationReason: r.escalationReason ?? null,
+      escalationRequired: !!r.escalationRequired, escalationFailureReason: r.escalationFailureReason ?? null,
       source: r.source, reasonCodes: r.reasonCodes, score: r.score ?? null,
       classifier: r.classifier ? { used: true, outcome: r.classifier.outcome, usage: r.classifier.usage, durationMs: r.classifier.durationMs } : { used: false },
       segments,

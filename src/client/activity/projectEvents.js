@@ -3,6 +3,7 @@
 // derived from real events, never from timers. One logical item (e.g. a tool call) is one row whose
 // status changes, and one streamed response is one assistant entry.
 import { toolInfo, toolLabel, fileActionLabel, validationLabel, groupHeader } from './toolDisplay.js'
+import { routeLabel } from '../models/modelSelection.js'
 import { friendlyError, friendlyToolError, technicalDetails } from './friendlyError.js'
 
 const SUBDUED = new Set(['read', 'search', 'git'])
@@ -231,6 +232,17 @@ export function createProjector() {
         if (i >= 0) replace(i, { ...entries[i], status: d.decision })
         if (pending?.id === d.id) pending = null
         if (status === 'waiting') status = 'working'
+        break
+      }
+      case 'model.route.selected':
+        closeAll()
+        add({ kind: 'route', id: `r:${++seq}`, mode: d.mode, tier: d.tier, escalated: false, label: routeLabel(d.mode, d.tier), provider: d.provider, model: d.model, reasonCodes: d.reasonCodes ?? [] })
+        break
+      case 'model.route.escalated': {
+        closeAll()
+        let i = entries.length - 1
+        while (i >= 0 && entries[i].kind !== 'route') i--
+        if (i >= 0) replace(i, { ...entries[i], tier: d.to, escalated: true, label: routeLabel(entries[i].mode, d.to), provider: d.provider, model: d.model })
         break
       }
       case 'provider.retry': {

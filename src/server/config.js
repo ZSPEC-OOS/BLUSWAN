@@ -2,6 +2,7 @@
 // It returns the effective settings plus every problem found, so `npm run server`, `npm run doctor` and the tests
 // all report the same, complete list. Values of secrets are never copied into messages.
 import path from 'node:path'
+import { parseRoutingEnv } from '../config/routingConfig.js'
 
 const LOOPBACK = ['127.0.0.1', '::1', 'localhost']
 export const AUTH_MODES = ['none', 'firebase']
@@ -78,10 +79,21 @@ export function parseServerConfig(env = process.env) {
   if (ghAny && !gh.hasWebhookSecret) warnings.push('GITHUB_APP_WEBHOOK_SECRET is not set: pull request merges are detected by refresh/polling only.')
   const githubConfigured = ghAny && !ghMissing.length
 
+  // Adaptive routing (optional). Malformed values are errors; a profile whose provider lacks credentials is a warning
+  // because Auto simply reports unavailable (the manual provider/model flow keeps working).
+  const routing = parseRoutingEnv(env, { knownProviders: Object.keys(PROVIDER_KEYS) })
+  errors.push(...routing.problems)
+  if (routing.configured && !routing.problems.length) {
+    for (const [tier, label] of [['fast', 'Flash'], ['advanced', 'Pro']]) {
+      const p = routing.profiles[tier]
+      if (!env[PROVIDER_KEYS[p.provider]]) warnings.push(`Routing ${label} profile uses ${p.provider}, but ${PROVIDER_KEYS[p.provider]} is not set: Auto will be unavailable.`)
+    }
+  }
+
   const providers = Object.entries(PROVIDER_KEYS).filter(([, k]) => !!env[k]).map(([p]) => p)
 
   return {
     ok: errors.length === 0, errors, warnings,
-    settings: { port, host, authMode, persistence, dataDir: env.BLUSWAN_DATA_DIR || '.bluswan/data', roots, production, corsOrigin: env.BLUSWAN_CORS_ORIGIN || null, providers, hostId: env.BLUSWAN_HOST_ID || null, projectId: env.FIREBASE_PROJECT_ID || null, staticDir: env.BLUSWAN_STATIC_DIR || null, github: { configured: githubConfigured, webhook: githubConfigured && gh.hasWebhookSecret, apiUrl: gh.apiUrl, webUrl: gh.webUrl, slug: gh.slug } },
+    settings: { port, host, authMode, persistence, dataDir: env.BLUSWAN_DATA_DIR || '.bluswan/data', roots, production, corsOrigin: env.BLUSWAN_CORS_ORIGIN || null, providers, hostId: env.BLUSWAN_HOST_ID || null, projectId: env.FIREBASE_PROJECT_ID || null, staticDir: env.BLUSWAN_STATIC_DIR || null, routing: { configured: routing.configured, defaultMode: routing.defaultMode, profiles: routing.profiles }, github: { configured: githubConfigured, webhook: githubConfigured && gh.hasWebhookSecret, apiUrl: gh.apiUrl, webUrl: gh.webUrl, slug: gh.slug } },
   }
 }

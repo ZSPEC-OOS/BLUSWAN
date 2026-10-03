@@ -133,6 +133,7 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = 
             active={snapshot.active} workspace={snapshot.active?.workspace ?? snapshot.workspace} model={snapshot.active?.model ?? snapshot.model}
             permissionMode={snapshot.permissionMode} onPermissionMode={store.setPermissionMode}
             onOpenSettings={() => setSettingsOpen(true)} onToggleSidebar={() => setSidebarOpen(o => !o)} onToggleChanges={toggleChanges} panelOpen={panelOpen} models={snapshot.models} onChooseModel={store.chooseModel}
+            routing={snapshot.routing} mode={snapshot.mode} onChooseMode={store.chooseMode}
           />
         ) : null}
         {gh && !mobile ? <WorkflowBar busy={runBusy} offline={!online} onReviewDiff={toggleChanges} /> : null}
@@ -184,6 +185,7 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = 
       {mobile && mSettingsOpen ? (
         <MobileSettings
           models={snapshot.models} model={snapshot.active?.model ?? snapshot.model} modelBusy={['working', 'waiting'].includes(snapshot.active?.view.status)} onChooseModel={store.chooseModel}
+          routing={snapshot.routing} mode={snapshot.mode} onChooseMode={store.chooseMode}
           permissionMode={snapshot.permissionMode} onPermissionMode={store.setPermissionMode} github={gh ? ghSnap : null}
           onGithub={() => { setMSettingsOpen(false); gh.openPanel('home') }} connection={snapshot.connection} apiUrl={apiUrl} diagnose={store.diagnoseConnection}
           onAllSettings={() => { setMSettingsOpen(false); setSettingsOpen(true) }} userEmail={userEmail} onSignOut={onLogout} onClose={() => setMSettingsOpen(false)}
@@ -193,6 +195,7 @@ export function Shell({ settings, userEmail, onLogout, mobileOverride, apiUrl = 
         <SettingsPanel
           settings={settings.get()} providers={snapshot.providerStatus} onSave={(patch) => { settings.update(patch); store.saveSettings(patch) }} permissionMode={snapshot.permissionMode} onPermissionMode={store.setPermissionMode}
           canOpenWorkspaces={snapshot.canOpenWorkspaces} onOpenWorkspace={store.openWorkspace} setup={snapshot.setup}
+          routing={snapshot.routing} mode={snapshot.mode} onChooseMode={store.chooseMode}
           userEmail={userEmail} onSignOut={onLogout} onClose={closeSettings}
         />
       ) : null}

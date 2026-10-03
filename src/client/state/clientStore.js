@@ -100,6 +100,7 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
         persistence: runtime.getPersistenceStatus?.(session.id) ?? 'saved',
         interrupted: view.status === 'interrupted',
         model: session.model,
+        modelPreference: session.modelPreference ?? null,
         workspace,
         changedFiles: session.changedFiles,
         tokenUsage: session.tokenUsage,
@@ -122,10 +123,16 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
       permissionMode: runtime.getPermissionMode?.() ?? 'auto_edit',
       providers: runtime.listProviders?.() ?? [],
       models: runtime.getModels?.() ?? [],
+      routing: runtime.getRouting?.() ?? null,
+      mode: session ? (session.modelPreference ?? null) : currentMode(),
       model,
       setup: readiness.ok ? { ready: true } : { ready: false, reason: readiness.reason, message: readiness.message },
     }
   }
+
+  /** Mode for new conversations: the user's pick this visit, else the server's preference (null = manual). */
+  let modeChoice
+  function currentMode() { return modeChoice !== undefined ? modeChoice : runtime.getPreferredModeForNew?.() ?? runtime.getRouting?.()?.preferredMode ?? null }
 
   const setNotice = (n) => { notice = n; invalidate() }
 
@@ -154,7 +161,7 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
     },
 
     newSession({ workspaceId = currentWorkspaceId } = {}) {
-      const session = runtime.startSession({ workspaceId: workspaceId ?? null, model: selectModel() })
+      const session = runtime.startSession({ workspaceId: workspaceId ?? null, model: selectModel(), modelPreference: currentMode() })
       attach(session)
       activeId = session.id
       currentWorkspaceId = session.workspaceId
@@ -258,10 +265,22 @@ export function createClientStore({ runtime, settings = null, selectModel = () =
     async chooseModel({ provider, model }) {
       if (!canAct()) { setNotice({ kind: 'error', text: OFFLINE_REASON }); return }
       settings?.update({ provider, model })
-      runtime.saveSettings?.({ provider, model }).catch(() => {})
+      modeChoice = null // a specific provider/model is a manual choice
+      runtime.saveSettings?.({ provider, model, modelMode: 'manual' }).catch(() => {})
       const id = activeId
       if (id && runtime.setSessionModel && !BUSY.has(ensure(runtime.getSession(id)).getView().status)) {
         try { await runtime.setSessionModel(id, { provider, model }) } catch (e) { setNotice({ kind: 'error', text: friendlyError(e), details: e?.message }) }
+      }
+      invalidate()
+    },
+    /** Auto / Flash / Pro: the choice for new conversations and, between runs, for the open one (applies to its next run). */
+    async chooseMode(mode) {
+      if (!canAct()) { setNotice({ kind: 'error', text: OFFLINE_REASON }); return }
+      modeChoice = mode
+      runtime.saveSettings?.({ modelMode: mode }).catch(() => {})
+      const id = activeId
+      if (id && runtime.setSessionMode && !BUSY.has(ensure(runtime.getSession(id)).getView().status)) {
+        try { await runtime.setSessionMode(id, mode) } catch (e) { setNotice({ kind: 'error', text: friendlyError(e), details: e?.message }) }
       }
       invalidate()
     },

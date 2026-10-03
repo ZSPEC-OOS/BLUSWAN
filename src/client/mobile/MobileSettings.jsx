@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { useFocusTrap } from '../shared/useFocusTrap.js'
 import ModelSelector from '../status/ModelSelector.jsx'
+import ModelModePicker from '../status/ModelModePicker.jsx'
 import DiagnosticsPanel from '../status/DiagnosticsPanel.jsx'
 import { MODE_INFO, PERMISSION_MODES } from '../../tools/permissionModes.js'
 import './mobile.css'
@@ -17,7 +18,7 @@ export function githubLabel(status) {
 }
 
 /** Mobile Settings: the existing model, edit-mode, GitHub and runtime state, grouped. Controls are the existing ones. */
-export default function MobileSettings({ models = [], model, modelBusy = false, onChooseModel, permissionMode, onPermissionMode, github = null, onGithub, connection, apiUrl = '', diagnose, onAllSettings, userEmail, onSignOut, onClose }) {
+export default function MobileSettings({ models = [], model, modelBusy = false, onChooseModel, routing = null, mode = null, onChooseMode = null, permissionMode, onPermissionMode, github = null, onGithub, connection, apiUrl = '', diagnose, onAllSettings, userEmail, onSignOut, onClose }) {
   const ref = useRef(null)
   const [diag, setDiag] = useState(false)
   useFocusTrap(ref, { onEscape: onClose })
@@ -28,9 +29,24 @@ export default function MobileSettings({ models = [], model, modelBusy = false, 
         <div className="mdrawer__body">
           <section className="msec" aria-labelledby="ms-ai">
             <h3 id="ms-ai" className="msec__title">AI</h3>
-            <div className="mfield"><span className="mfield__label" id="ms-model-l">Model</span>
-              {onChooseModel ? <ModelSelector models={models} current={model} disabled={modelBusy} onChange={onChooseModel} /> : <span className="mrow__detail">{model?.model || 'No model'}</span>}
-            </div>
+            {routing?.modes?.length && onChooseMode ? (
+              <>
+                <div className="mfield"><span className="mfield__label" id="ms-model-l">Model</span>
+                  <ModelModePicker routing={routing} mode={mode} disabled={modelBusy} onChange={onChooseMode} />
+                  {modelBusy ? <span className="mrow__detail">Stop BLUSWAN to change the model.</span> : null}
+                </div>
+                {onChooseModel ? (
+                  <details className="mmanual">
+                    <summary className="mfield__label">Choose a specific model{mode ? '' : ` — ${model?.model || 'none'}`}</summary>
+                    <ModelSelector models={models} current={model} disabled={modelBusy} onChange={onChooseModel} />
+                  </details>
+                ) : null}
+              </>
+            ) : (
+              <div className="mfield"><span className="mfield__label" id="ms-model-l">Model</span>
+                {onChooseModel ? <ModelSelector models={models} current={model} disabled={modelBusy} onChange={onChooseModel} /> : <span className="mrow__detail">{model?.model || 'No model'}</span>}
+              </div>
+            )}
             {onAllSettings ? <button type="button" className="mrow" onClick={onAllSettings}><span className="mrow__label">Provider status &amp; default model</span><span className="mrow__chev" aria-hidden="true">›</span></button> : null}
           </section>
 

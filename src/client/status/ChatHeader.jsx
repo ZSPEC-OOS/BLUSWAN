@@ -5,7 +5,7 @@ import ModelSelector from './ModelSelector.jsx'
 import './status.css'
 
 /** Repository identity, state, changed-file count, model and permission mode, always visible above the conversation. */
-export default function ChatHeader({ active, workspace, model, permissionMode, onPermissionMode, onOpenSettings, onToggleSidebar, onToggleChanges, panelOpen = false, models = [], onChooseModel }) {
+export default function ChatHeader({ active, workspace, model, permissionMode, onPermissionMode, onOpenSettings, onToggleSidebar, onToggleChanges, panelOpen = false, models = [], onChooseModel, routing = null, mode = null, onChooseMode = null }) {
   const changed = active?.changedCount ?? 0
   const status = active?.view.status ?? 'ready'
   return (
@@ -28,7 +28,7 @@ export default function ChatHeader({ active, workspace, model, permissionMode, o
           {changed ? `${changed} ${changed === 1 ? 'file' : 'files'} changed` : 'Workspace'}
         </button>
       ) : null}
-      {onChooseModel ? <ModelSelector models={models} current={model} disabled={status === 'working' || status === 'waiting'} onChange={onChooseModel} /> : <span className="topbar__model">{model?.model || 'No model'}</span>}
+      {onChooseModel ? <ModelSelector models={models} current={model} disabled={status === 'working' || status === 'waiting'} onChange={onChooseModel} routing={routing} mode={mode} onModeChange={onChooseMode} /> : <span className="topbar__model">{model?.model || 'No model'}</span>}
       <label className="topbar__mode">
         <span className="sr-only">Permission mode</span>
         <select value={permissionMode} onChange={(e) => onPermissionMode(e.target.value)} aria-label="Permission mode" title={MODE_INFO[permissionMode]?.description}>

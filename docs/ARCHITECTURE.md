@@ -71,7 +71,7 @@ Every adapter implements the same contract and is built from the same transport:
 
 ```text
 { id, listModels(), capabilities(model), normalizeMessages(), normalizeTools(), validate(model), stream(request, {onEvent}) }
-request: { model, messages, tools, signal, temperature, maxOutputTokens }
+request: { model, messages, tools, signal, temperature, maxOutputTokens, reasoningEffort? }
 events:  text_delta · reasoning_delta · tool_call_start · tool_call_delta · tool_call_complete · usage · completed
 errors:  configuration_error · authentication_error · rate_limit · network_error · provider_timeout · invalid_response ·
          context_limit · unsupported_feature · cancelled · provider_error
@@ -79,7 +79,11 @@ errors:  configuration_error · authentication_error · rate_limit · network_er
 
 Tool calls are normalized to `{ id, name, input }`; tool results continue as canonical `{ role: 'tool', toolCallId, name, content }` messages that each adapter converts to its native continuation (OpenAI `function_call_output`, Anthropic `tool_result`, chat-completions `tool` messages). Usage is `{ input, output, reasoning, total, cachedInput? }`. A shared contract suite (`src/providers/contract.test.mjs`) runs against all four adapters through their native wire formats. See [PROVIDERS.md](PROVIDERS.md).
 
-The selected model is explicit: there is no automatic routing and no silent fallback. A session's model can change between runs; the canonical history, summary, workspace and validation state carry over and the next provider's context is rebuilt from them. A model without tool calling cannot run the coding agent (`unsupported_feature`).
+With a manual selection the model you pick is the model that runs; with Adaptive Intelligence Routing (below) BLUSWAN picks a capability profile per request. There is never a silent fallback between providers or tiers. A session's model can change between runs; the canonical history, summary, workspace and validation state carry over and the next provider's context is rebuilt from them. A model without tool calling cannot run the coding agent (`unsupported_feature`).
+
+## Adaptive Intelligence Routing
+
+`src/routing` decides, per user request, which capability profile (provider, model, reasoning effort) the one existing agent loop runs on. It adds no second agent: browser → runtime → routing policy → resolved profile → the same provider-neutral loop, with context, tools, validation, recovery, permissions and persistence untouched. Routing code is pure (it imports only `config` and `protocol`); the classifier's single model call is injected by `agent/routingBridge.js`. Full description: [ROUTING.md](ROUTING.md).
 
 ## Context
 

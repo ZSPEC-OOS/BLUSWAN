@@ -133,7 +133,7 @@ describe('repositories', () => {
     const repo = createSettingsRepository(createMemoryPersistence(), { userId: 'alice' })
     await repo.save({ permissionMode: 'full_auto', model: 'deepseek-chat', apiKey: 'sk-secret-123456789', baseUrl: 'x' })
     const s = await repo.load()
-    assert.deepEqual(s, { permissionMode: 'full_auto', provider: '', model: 'deepseek-chat' })
+    assert.deepEqual(s, { permissionMode: 'full_auto', provider: '', modelMode: '', model: 'deepseek-chat' })
     assert.doesNotMatch(JSON.stringify(s), /sk-secret/)
   })
 })

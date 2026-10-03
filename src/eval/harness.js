@@ -18,18 +18,18 @@ export function countDuplicateCalls(toolCalls) {
 }
 
 /**
- * @param {{task:object, model:{provider:string,model:string}, providers?:object, config?:object, maxTurns?:number,
+ * @param {{task:object, model:{provider:string,model:string}, modelPreference?:('auto'|'fast'|'advanced'|null), routing?:object, providers?:object, config?:object, maxTurns?:number,
  *          timeoutMs?:number, now?:()=>number, permissionMode?:string}} options
  * @returns {Promise<object>} raw metrics for this one run
  */
-export async function runEvalTask({ task, model, providers, config = getRuntimeConfig(), maxTurns = 14, timeoutMs = 180_000, now = () => Date.now(), permissionMode = 'full_auto' }) {
+export async function runEvalTask({ task, model, modelPreference = null, routing = null, providers, config = getRuntimeConfig(), maxTurns = 14, timeoutMs = 180_000, now = () => Date.now(), permissionMode = 'full_auto' }) {
   const fx = await createFixtureRepo({ files: task.files })
   const started = now()
   try {
     const workspaces = createNodeWorkspaceManager()
-    const runtime = createAgentRuntime({ ...(providers ? { providers } : {}), workspaces, config: { ...config, maxTurns, permissionMode }, approvals: 'unattended' })
+    const runtime = createAgentRuntime({ ...(providers ? { providers } : {}), ...(routing ? { routing } : {}), workspaces, config: { ...config, maxTurns, permissionMode }, approvals: 'unattended' })
     const ws = await workspaces.openWorkspace({ root: fx.root })
-    const session = runtime.startSession({ workspaceId: ws.id, model })
+    const session = runtime.startSession({ workspaceId: ws.id, model, modelPreference })
     const timer = setTimeout(() => runtime.cancelSession(session.id), timeoutMs)
     let done
     try { done = await runtime.sendMessage(session.id, task.prompt) } finally { clearTimeout(timer) }
@@ -37,6 +37,7 @@ export async function runEvalTask({ task, model, providers, config = getRuntimeC
     const unnecessary = changed.filter(p => !task.expectedFiles.includes(p))
     const success = await Promise.resolve(task.check(ws)).catch(() => false)
     const failure = done.events.find(e => e.type === 'session.failed')?.data.error
+    const route = done.runs.at(-1)?.route ?? null
     return {
       task: task.id, provider: model.provider, model: model.model,
       success: !!success, sessionStatus: done.status, validationStatus: done.validation?.currentStatus ?? 'none',
@@ -44,6 +45,7 @@ export async function runEvalTask({ task, model, providers, config = getRuntimeC
       toolCalls: done.toolCalls.length, duplicateToolCalls: countDuplicateCalls(done.toolCalls),
       filesChanged: changed.length, unnecessaryFilesChanged: unnecessary.length, changedFiles: changed,
       turns: done.turns.length, tokens: { ...done.tokenUsage }, durationMs: now() - started,
+      ...(route ? { route: { requestedMode: route.requestedMode, initialTier: route.initialTier, finalTier: route.finalTier, escalated: route.escalated, source: route.source, classifier: route.classifier, segments: route.segments } } : {}),
       ...(failure ? { error: { code: failure.code, message: failure.message } } : {}),
     }
   } finally {

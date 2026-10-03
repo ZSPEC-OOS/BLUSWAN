@@ -31,6 +31,8 @@ import { createDefaultToolRegistry } from '../tools/registry.js'
 import { createToolExecutor } from '../tools/executor.js'
 import { toolFailure } from '../tools/result.js'
 import { assertCodingCapable } from '../providers/capabilities.js'
+import { evaluateEscalation } from '../routing/escalation.js'
+import { MODES, TIERS } from '../routing/profiles.js'
 import { decidePermission, describePermission, isPermissionMode, BLOCKED_MESSAGE, DEFAULT_PERMISSION_MODE } from '../tools/permissionModes.js'
 import { createValidationEngine } from '../validation/validationEngine.js'
 import { createValidationState, markMutated, recordShellResult } from '../validation/validationState.js'
@@ -60,6 +62,7 @@ export function createAgentRuntime({
   workspaces = null, // workspace manager; sessions with a workspaceId get tools
   workspaceNotes = null, // async (workspaceId) => text appended to the system prompt (e.g. the branch workflow the user manages)
   tools = createDefaultToolRegistry(),
+  routing = null, // adaptive routing (agent/routingBridge.js createRouting); null = manual provider/model selection only
   toolPolicy,
   approvals = 'unattended', // 'interactive': actions that need approval wait for approvePermission/denyPermission; 'unattended': they fail with permission_required
   now = () => Date.now(),
@@ -129,13 +132,13 @@ export function createAgentRuntime({
     return next
   }
 
-  function startSession({ workspaceId = null, model, id } = {}) {
+  function startSession({ workspaceId = null, model, id, modelPreference = null } = {}) {
     if (workspaceId !== null && workspaces && !workspaces.getWorkspace(workspaceId)) {
       throw new Error(`Unknown workspace: ${workspaceId}`)
     }
-    const session = sessions.create({ workspaceId, model: model ?? getDefaultModelRef(config), id })
+    const session = sessions.create({ workspaceId, model: model ?? getDefaultModelRef(config), id, modelPreference })
     agents.set(session.id, createAgentState(session.id, now()))
-    emit(session.id, 'session.started', { model: session.model, workspaceId })
+    emit(session.id, 'session.started', { model: session.model, workspaceId, modelPreference: session.modelPreference })
     return sessions.get(session.id)
   }
 
@@ -463,6 +466,115 @@ export function createAgentRuntime({
     return { provider, workspace }
   }
 
+  // ─── Adaptive routing ───────────────────────────────────────────────────────
+  // The router picks a profile (provider, model, reasoning effort) per user request; everything after that is the
+  // one existing agent loop. The route lives on the run object, so concurrent runs never share a tier.
+
+  /** Bounded facts about the session the router may use for follow-ups; never message content. */
+  function routingContext(session) {
+    const last = [...(session.runs ?? [])].reverse().find(r => r.route)
+    return {
+      prior: last ? { tier: last.route.finalTier, score: last.route.score ?? 0, failedValidation: last.outcome === 'failed' || last.validation?.finalValidationStatus === 'failed' } : null,
+      changedFiles: session.changedFiles.length,
+      unresolvedFailures: (session.validation?.unresolved ?? []).length,
+    }
+  }
+
+  const routeEventData = (route) => ({ mode: route.mode, tier: route.tier, provider: route.provider, model: route.model, reasoningEffort: route.reasoningEffort, source: route.source, reasonCodes: route.reasonCodes })
+
+  /** Resolves this request's route (Auto: signals/classifier; Flash/Pro: the forced profile) and points the session at it. */
+  async function routeRun(sessionId, content, controller, run) {
+    const session = sessions.get(sessionId)
+    if (!session.modelPreference) return // manual selection (and every pre-routing session): session.model runs as chosen
+    if (!routing) throw createError({ code: 'configuration_error', message: 'Automatic model selection is not configured on this server. Choose a model in Settings.' })
+    const route = await routing.router.route({ mode: session.modelPreference, message: content, context: routingContext(session), signal: controller.signal })
+    if (controller.signal.aborted) throw createError({ code: 'cancelled', message: 'Session cancelled.' })
+    run.route = { ...route, initialTier: route.tier, escalated: false }
+    sessions.update(sessionId, { model: { provider: route.provider, model: route.model } })
+    log.info('route selected', { sessionId, ...routeEventData(route), classifier: route.classifier?.outcome ?? null }) // codes and ids only: never prompts or reasoning
+    emit(sessionId, 'model.route.selected', routeEventData(route))
+    emit(sessionId, 'session.updated', { status: sessions.get(sessionId).status, model: sessions.get(sessionId).model })
+  }
+
+  /** At a safe turn boundary: moves a Fast run to the Advanced profile (once, never back). History and state are untouched. */
+  function maybeEscalate(sessionId, run, failedTurns) {
+    if (!run.route || run.route.escalationBlocked) return false
+    const verdict = evaluateEscalation(run.route, {
+      recoveryRounds: run.counters.recoveryRounds, repairSucceeded: run.counters.repairSucceeded, sawFailure: run.counters.sawFailure,
+      failedTurns, newChangedFiles: Math.max(0, sessions.get(sessionId).changedFiles.length - run.changedAtStart),
+    })
+    if (!verdict.escalate) return false
+    const target = routing?.profiles?.advanced
+    try {
+      if (!target || routing.evaluation.tiers.advanced?.ok === false) throw new Error('advanced profile unavailable')
+      const provider = providers.getProvider(target.provider)
+      provider.validate?.(target.model)
+      assertCodingCapable(provider.capabilities(target.model), { provider: target.provider, model: target.model })
+    } catch {
+      run.route.escalationBlocked = true // stays on Flash; nothing else is substituted
+      log.warn('escalation unavailable', { sessionId, reason: verdict.reasonCode })
+      return false
+    }
+    const from = run.route.tier
+    run.route = { ...run.route, tier: TIERS.ADVANCED, provider: target.provider, model: target.model, reasoningEffort: target.reasoningEffort, escalated: true, escalationReason: verdict.reasonCode }
+    sessions.update(sessionId, { model: { provider: target.provider, model: target.model } })
+    log.info('route escalated', { sessionId, from, to: TIERS.ADVANCED, reasonCode: verdict.reasonCode })
+    emit(sessionId, 'model.route.escalated', { from, to: TIERS.ADVANCED, provider: target.provider, model: target.model, reasoningEffort: target.reasoningEffort, reasonCode: verdict.reasonCode })
+    emit(sessionId, 'session.updated', { status: sessions.get(sessionId).status, model: sessions.get(sessionId).model })
+    return true
+  }
+
+  /** Safe usage/outcome summary of a routed run, grouped into one segment per tier. Never contains prompts or reasoning. */
+  function summarizeRoute(run, turns) {
+    const segments = []
+    for (const t of turns) {
+      let seg = segments.at(-1)
+      if (!seg || seg.tier !== t.tier) {
+        seg = { tier: t.tier, provider: t.provider, model: t.model, reasoningEffort: t.reasoningEffort ?? null, turns: 0, toolCalls: 0, input: 0, output: 0, reasoning: 0, cachedInput: 0, durationMs: 0 }
+        segments.push(seg)
+      }
+      seg.turns += 1; seg.toolCalls += t.toolCalls.length; seg.durationMs += Math.max(0, t.completedAt - t.startedAt)
+      seg.input += t.usage?.input ?? 0; seg.output += t.usage?.output ?? 0; seg.reasoning += t.usage?.reasoning ?? 0; seg.cachedInput += t.usage?.cachedInput ?? 0
+    }
+    const r = run.route
+    return {
+      requestedMode: r.mode, initialTier: r.initialTier, finalTier: r.tier, escalated: r.escalated, escalationReason: r.escalationReason ?? null,
+      source: r.source, reasonCodes: r.reasonCodes, score: r.score ?? null,
+      classifier: r.classifier ? { used: true, outcome: r.classifier.outcome, usage: r.classifier.usage, durationMs: r.classifier.durationMs } : { used: false },
+      segments,
+    }
+  }
+
+  /**
+   * Sets the routing preference for the NEXT run (auto | fast | advanced), or null for a manual provider/model
+   * selection. Allowed only between runs. Flash/Pro point the session at that profile immediately.
+   */
+  function setModelPreference(sessionId, mode) {
+    const session = sessions.get(sessionId)
+    if (!session) throw createError({ code: 'not_found', message: 'Unknown session.' })
+    if (session.status === 'running' || session.status === 'waiting_permission') {
+      throw createError({ code: 'session_busy', message: 'Stop BLUSWAN before changing the model.' })
+    }
+    if (mode !== null && ![MODES.AUTO, MODES.FAST, MODES.ADVANCED].includes(mode)) throw createError({ code: 'invalid_request', message: 'Choose Auto, Flash or Pro.' })
+    if (mode !== null) {
+      if (!routing) throw createError({ code: 'configuration_error', message: 'Automatic model selection is not configured on this server.' })
+      const need = mode === MODES.AUTO ? [TIERS.FAST, TIERS.ADVANCED] : [mode === MODES.FAST ? TIERS.FAST : TIERS.ADVANCED]
+      for (const tier of need) {
+        const t = routing.evaluation.tiers[tier]
+        if (!t?.ok) throw createError({ code: 'configuration_error', message: t?.reason ?? 'That model profile is unavailable.' })
+      }
+    }
+    const patch = { modelPreference: mode }
+    if (mode === MODES.FAST || mode === MODES.ADVANCED) {
+      const p = routing.profiles[mode]
+      patch.model = { provider: p.provider, model: p.model }
+    }
+    sessions.update(sessionId, patch)
+    const next = sessions.get(sessionId)
+    emit(sessionId, 'session.updated', { status: next.status, model: next.model, modelPreference: next.modelPreference })
+    return { modelPreference: next.modelPreference, model: next.model }
+  }
+
   /**
    * Chooses the model for the NEXT run. Allowed only between runs; the canonical history, summary, workspace and
    * validation state carry over unchanged (nothing provider-specific is stored, so nothing needs migrating).
@@ -478,8 +590,8 @@ export function createAgentRuntime({
     }
     const provider = providers.getProvider(model.provider) // unknown provider → configuration_error
     if (session.workspaceId) assertCodingCapable(provider.capabilities(model.model), { provider: model.provider, model: model.model })
-    sessions.update(sessionId, { model: { provider: model.provider, model: model.model } })
-    emit(sessionId, 'session.updated', { status: sessions.get(sessionId).status, model: { provider: model.provider, model: model.model } })
+    sessions.update(sessionId, { model: { provider: model.provider, model: model.model }, modelPreference: null }) // an explicit provider/model is a manual choice
+    emit(sessionId, 'session.updated', { status: sessions.get(sessionId).status, model: { provider: model.provider, model: model.model }, modelPreference: null })
     return sessions.get(sessionId).model
   }
 
@@ -598,11 +710,11 @@ export function createAgentRuntime({
   /** @returns {Promise<{kind:'completed'}|{kind:'stopped', error:object, notice:string}>} throws on cancel/provider failure */
   async function runAgent(sessionId, controller, run) {
     const { signal } = controller
-    const { provider, workspace } = validateRun(sessions.get(sessionId))
+    let { provider, workspace } = validateRun(sessions.get(sessionId))
     const notes = workspaceNotes ? await workspaceNotes(sessions.get(sessionId).workspaceId).catch(() => '') : ''
     const system = notes ? `${buildSystemPrompt()}\n\n${notes}` : buildSystemPrompt()
     const toolDefs = workspace ? tools.describeTools() : []
-    const summarizer = config.summarizeWithModel
+    let summarizer = config.summarizeWithModel
       ? createProviderSummarizer({ provider, model: sessions.get(sessionId).model.model, signal }) : null
     const guard = createLoopGuard({ threshold: config.maxIdenticalToolCalls })
     const shouldStop = composeStopConditions(userCancelled(), maxTurns(config.maxTurns), noProgress(config.maxFailedTurns))
@@ -619,6 +731,12 @@ export function createAgentRuntime({
       if (stop?.reason === 'no_progress') {
         return { kind: 'stopped', error: createError({ code: 'no_progress', message: `${failedTurns} consecutive turns made no progress (every tool call failed).` }),
           notice: 'I stopped because several consecutive turns made no progress (every tool call failed). Work completed so far is preserved in the workspace; tell me how to proceed.' }
+      }
+
+      // Safe boundary for Flash → Pro: between turns, after the cancel check, with every earlier tool call finished.
+      if (maybeEscalate(sessionId, run, failedTurns)) {
+        provider = validateRun(sessions.get(sessionId)).provider
+        summarizer = config.summarizeWithModel ? createProviderSummarizer({ provider, model: sessions.get(sessionId).model.model, signal }) : null
       }
 
       turnCount += 1
@@ -643,6 +761,7 @@ export function createAgentRuntime({
             tools: ctx.tools,
             temperature: config.temperature,
             maxOutputTokens: config.maxOutputTokens,
+            ...(run.route?.reasoningEffort ? { reasoningEffort: run.route.reasoningEffort } : {}),
             metadata: { sessionId, turn: turnNo },
           },
           onText: (text) => emit(sessionId, 'assistant.text.delta', { text }),
@@ -682,6 +801,7 @@ export function createAgentRuntime({
         turns: [...s.turns, {
           turn: turnNo, startedAt, completedAt: now(), provider: model.provider, model: model.model,
           toolCalls: calls.map(c => ({ id: c.id, name: c.name })), usage: turn.usage, finishReason: turn.finishReason, context: ctx.metrics,
+          ...(run.route ? { tier: run.route.tier, reasoningEffort: run.route.reasoningEffort } : {}),
         }],
       })
 
@@ -741,6 +861,7 @@ export function createAgentRuntime({
       id: run.id, userMessageId: run.userMessageId, startedAt: run.startedAt, completedAt: now(), outcome,
       turns: s.turns.length - run.turnsAtStart, changedFiles: s.changedFiles.map(f => f.path),
       warnings: c.warnings,
+      ...(run.route ? { route: summarizeRoute(run, s.turns.slice(run.turnsAtStart)) } : {}),
       validation: {
         validationCommandsRun: c.commandsRun, validationPasses: c.passes, validationFailures: c.failures, validationDurationMs: c.durationMs,
         recoveryRounds: c.recoveryRounds, automaticRounds: c.validationRounds, finalValidationStatus: (s.validation ?? createValidationState()).currentStatus,
@@ -779,8 +900,9 @@ export function createAgentRuntime({
     emit(sessionId, 'user.message', { messageId: message.id, content })
     emit(sessionId, 'session.updated', { status: 'running' })
 
-    const run = { id: `run_${newId()}`, userMessageId: message.id, startedAt: now(), counters: createRunCounters(), turnsAtStart: session.turns.length }
+    const run = { id: `run_${newId()}`, userMessageId: message.id, startedAt: now(), counters: createRunCounters(), turnsAtStart: session.turns.length, changedAtStart: session.changedFiles.length, route: null }
     try {
+      await routeRun(sessionId, content, controller, run)
       const outcome = await runAgent(sessionId, controller, run)
       setAgent(sessionId, { status: 'completed', abortController: null })
       if (outcome.kind === 'completed') {
@@ -911,6 +1033,8 @@ export function createAgentRuntime({
     listModels: (providerId) => providers.listModels(providerId),
     resolveModel: (providerId, modelId) => providers.resolveModel(providerId, modelId),
     setSessionModel,
+    setModelPreference,
+    getRouting: () => routing?.public ?? null,
     exportSession,
     restoreSession,
     reconcileSession,

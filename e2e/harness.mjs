@@ -31,7 +31,7 @@ const state = {
   backend: null, backendPort: 0, root: null, dataDir: null, repo: null,
   tokens: new Map(), // user → token the gateway attaches
   valid: new Set(), generation: 0,
-  fake: null, providerMode: 'ok', readyFail: false, streamBlocked: false, proxied: new Set(), requests: 0,
+  fake: null, routing: false, providerMode: 'ok', readyFail: false, streamBlocked: false, proxied: new Set(), requests: 0,
 }
 
 const tokenFor = (user) => state.tokens.get(user) ?? `tok-${user}-${state.generation}`
@@ -74,8 +74,35 @@ function respond(req, _n, onEvent) {
   })()
 }
 
+/**
+ * Routed mode: the Flash and Pro profiles are two scripted models (ids `fake-fast` and `fake-pro`) served through
+ * the deepseek and kimi provider slots, so the real server routes between genuinely different providers.
+ * A reply starts with the model that produced it, so tests can tell which profile actually ran.
+ */
+function respondRouted(providerId) {
+  const model = providerId === 'deepseek' ? 'fake-fast' : 'fake-pro'
+  return (req, n, onEvent) => {
+    const text = lastUser(req).toLowerCase()
+    const k = assistantsSinceUser(req)
+    if (state.providerMode === 'outage') throw createError({ code: 'provider_error', message: 'The provider is unavailable.', retryable: false, provider: providerId })
+    if (req.metadata?.purpose === 'routing') return reply(say('{"route":"advanced","confidence":0.9,"scope":"broad","risk":"medium"}'))
+    return (async () => {
+      if (text.startsWith('stubborn')) { // the fast model cannot make progress; the pro model finishes
+        if (model === 'fake-fast') return reply(call(`miss${k}`, 'read_file', { path: `missing-${k}.txt` }))
+        await typed(onEvent, `[${model}] resolved after escalation.`); return reply()
+      }
+      if (text.startsWith('slow')) {
+        for (let i = 0; i < 200 && !req.signal?.aborted; i++) { onEvent(say(`tick ${i} `)); await sleep(100) }
+        return []
+      }
+      await typed(onEvent, `[${model}] done.`); return reply()
+    })()
+  }
+}
+
 function backendEnv() {
   return {
+    ...(state.routing ? { BLUSWAN_MODEL_MODE: 'auto', BLUSWAN_FAST_PROVIDER: 'deepseek', BLUSWAN_FAST_MODEL: 'fake-fast', BLUSWAN_ADVANCED_PROVIDER: 'kimi', BLUSWAN_ADVANCED_MODEL: 'fake-pro' } : {}),
     BLUSWAN_PORT: '0', BLUSWAN_HOST: '127.0.0.1', BLUSWAN_PERSISTENCE: 'file', BLUSWAN_DATA_DIR: state.dataDir, BLUSWAN_WORKSPACE_ROOTS: state.root,
     BLUSWAN_AUTH: 'none', BLUSWAN_PERMISSION_MODE: 'auto_edit',
   }
@@ -87,7 +114,10 @@ async function startBackend() {
   const persistence = persistenceMod.createFilePersistence({ dir: state.dataDir })
   const probe = persistence.probe
   persistence.probe = async () => { if (state.readyFail) throw new Error('forced'); return probe() }
-  const credentials = createCredentialStore({ deepseek: { apiKey: 'e2e-not-a-real-key', baseUrl: 'http://invalid.test', model: 'scripted-model' } })
+  const credentials = createCredentialStore({
+    deepseek: { apiKey: 'e2e-not-a-real-key', baseUrl: 'http://invalid.test', model: state.routing ? 'fake-fast' : 'scripted-model' },
+    ...(state.routing ? { kimi: { apiKey: 'e2e-not-a-real-key', baseUrl: 'http://invalid.test', model: 'fake-pro' } } : {}),
+  })
   const api = createGithubApi({ apiUrl: state.fake.url })
   const github = {
     settings: { configured: true, webhook: false, apiUrl: state.fake.url, webUrl: state.fake.url, slug: 'bluswan-e2e' }, api, webApi: api,
@@ -96,7 +126,7 @@ async function startBackend() {
   }
   state.backend = await startServer({
     env: backendEnv(), heartbeatMs: 1000, shutdownDeadlineMs: 1500,
-    injected: { auth, persistence, credentials, github, providerFactory: () => createFakeProvider({ id: 'deepseek', respond }) },
+    injected: { auth, persistence, credentials, github, providerFactory: state.routing ? () => ['deepseek', 'kimi'].map(id => createFakeProvider({ id, respond: respondRouted(id) })) : () => createFakeProvider({ id: 'deepseek', respond }) },
   })
   state.backendPort = state.backend.port
 }
@@ -118,7 +148,7 @@ async function reset() {
   const target = path.join(state.root, 'repo')
   await fs.rename(state.repo.root, target).catch(async () => { await fs.cp(state.repo.root, target, { recursive: true }) })
   state.repoPath = target
-  state.tokens.clear(); state.protocolOverride = null; state.generation = 0; state.providerMode = 'ok'; state.readyFail = false; state.streamBlocked = false
+  state.tokens.clear(); state.protocolOverride = null; state.generation = 0; state.providerMode = 'ok'; state.routing = false; state.readyFail = false; state.streamBlocked = false
   await startBackend()
 }
 
@@ -141,6 +171,7 @@ async function control(req, res, url) {
   if (op === 'stream/block') { state.streamBlocked = q.get('on') === '1'; if (state.streamBlocked) for (const r of [...state.proxied]) r.destroy(); return json(res, 200, { blocked: state.streamBlocked }) }
   if (op === 'token/expire') { state.generation += 1; state.tokens.set(q.get('user') ?? 'alice', `tok-${q.get('user') ?? 'alice'}-0`); return json(res, 200, { ok: true }) } // the gateway keeps sending the old token
   if (op === 'token/refresh') { state.tokens.delete(q.get('user') ?? 'alice'); return json(res, 200, { ok: true, generation: state.generation }) }
+  if (op === 'routing') { state.routing = q.get('on') === '1'; await stopBackend(); await startBackend(); return json(res, 200, { routing: state.routing }) }
   if (op === 'provider') { state.providerMode = q.get('mode') ?? 'ok'; return json(res, 200, { mode: state.providerMode }) }
   if (op === 'ready-fail') { state.readyFail = q.get('on') === '1'; return json(res, 200, { readyFail: state.readyFail }) }
   if (op === 'file') {

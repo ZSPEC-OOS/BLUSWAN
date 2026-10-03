@@ -23,6 +23,8 @@
     "test:architecture": "node --test \"src/architecture.test.mjs\"",
     "test:eval": "node --test \"src/eval/*.test.mjs\"",
     "test:deepseek": "node --env-file-if-exists=.env scripts/provider-smoke.mjs deepseek",
+    "test:deepseek-flash": "node --env-file-if-exists=.env scripts/provider-smoke.mjs deepseek deepseek-flash",
+    "test:deepseek-pro": "node --env-file-if-exists=.env scripts/provider-smoke.mjs deepseek deepseek-v4-pro",
     "test:kimi": "node --env-file-if-exists=.env scripts/provider-smoke.mjs kimi",
     "test:openai": "node --env-file-if-exists=.env scripts/provider-smoke.mjs openai",
     "test:anthropic": "node --env-file-if-exists=.env scripts/provider-smoke.mjs anthropic",
@@ -30,7 +32,8 @@
     "test:release": "npm test && npm run lint && npm run build && npm run test:e2e",
     "dogfood": "node --env-file-if-exists=.env scripts/dogfood.mjs",
     "doctor": "node --env-file-if-exists=.env scripts/doctor.mjs",
-    "eval": "node --env-file-if-exists=.env scripts/eval.mjs"
+    "eval": "node --env-file-if-exists=.env scripts/eval.mjs",
+    "eval:routing": "node --env-file-if-exists=.env scripts/eval-routing.mjs"
   },
   "dependencies": {
     "firebase": "12.10.0",

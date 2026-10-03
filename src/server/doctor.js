@@ -52,6 +52,16 @@ export async function runDoctor({ env = process.env, url, token = env.BLUSWAN_DO
     ? pass('providers', `Model providers configured: ${configured.join(', ')}`)
     : warn('providers', 'No model provider is configured', 'BLUSWAN runs, but model calls will fail.', 'Set at least one of DEEPSEEK_API_KEY, KIMI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY on the runtime.'))
 
+  // 2b. adaptive routing (names and model ids only; no secrets)
+  const r = settings.routing
+  if (r?.configured) {
+    const missing = ['fast', 'advanced'].filter(t => !env[PROVIDER_VARS[r.profiles[t].provider]]).map(t => `${t === 'fast' ? 'Flash' : 'Pro'} (${r.profiles[t].provider})`)
+    const summary = `Flash=${r.profiles.fast.provider}/${r.profiles.fast.model} (${r.profiles.fast.reasoningEffort}), Pro=${r.profiles.advanced.provider}/${r.profiles.advanced.model} (${r.profiles.advanced.reasoningEffort}), default mode ${r.defaultMode}`
+    checks.push(missing.length
+      ? warn('routing', 'Adaptive routing is configured but Auto is unavailable', `${summary}. No credentials for: ${missing.join(', ')}.`, 'Set the provider API key on the runtime so both profiles can run.')
+      : parsed.ok ? pass('routing', 'Adaptive routing profiles are usable', summary) : warn('routing', 'Adaptive routing configuration has errors', summary, 'Fix the BLUSWAN_MODEL_MODE / BLUSWAN_FAST_* / BLUSWAN_ADVANCED_* variables reported above.'))
+  } else checks.push(skip('routing', 'Adaptive routing is not configured (manual provider/model selection only)'))
+
   // 3. workspace roots
   if (settings.roots.length) {
     const usable = []

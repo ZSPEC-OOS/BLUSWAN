@@ -22,8 +22,8 @@ export function createSessionManager({ now = () => Date.now() } = {}) {
   }
 
   return {
-    create({ workspaceId, model, id } = {}) {
-      return write(createSession({ workspaceId, model, id, now: now() }))
+    create({ workspaceId, model, id, modelPreference } = {}) {
+      return write(createSession({ workspaceId, model, id, modelPreference, now: now() }))
     },
 
     createSession(init) { return this.create(init) },

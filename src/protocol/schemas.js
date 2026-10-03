@@ -139,12 +139,15 @@ export function isValidMessage(m) {
 /**
  * @param {{workspaceId?:(string|null), model:{provider:string,model:string}, id?:string, now?:number}} init
  */
-export function createSession({ workspaceId = null, model, id, now = Date.now() } = {}) {
+export function createSession({ workspaceId = null, model, id, modelPreference = null, now = Date.now() } = {}) {
   if (!isModelRef(model)) throw new Error('createSession requires model = { provider, model }')
   return {
     id: id ?? newId(),
     workspaceId,
+    // `model` is the model that runs (or last ran) the session; `modelPreference` is the user's routing choice
+    // ('auto' | 'fast' | 'advanced'), or null for a manual provider/model selection (also every pre-routing session).
     model: { provider: model.provider, model: model.model },
+    modelPreference: isModelMode(modelPreference) ? modelPreference : null,
     messages: [],
     events: [],
     toolCalls: [],
@@ -170,6 +173,9 @@ export function updateSession(session, patch = {}, now = Date.now()) {
   const { id: _id, startedAt: _startedAt, ...allowed } = patch
   return { ...session, ...allowed, updatedAt: now }
 }
+
+export const MODEL_MODES = Object.freeze(['auto', 'fast', 'advanced'])
+export const isModelMode = (m) => MODEL_MODES.includes(m)
 
 export function isModelRef(m) {
   return !!m && typeof m.provider === 'string' && m.provider !== ''

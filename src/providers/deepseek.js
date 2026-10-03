@@ -11,12 +11,25 @@ export const DEEPSEEK_ID = 'deepseek'
 const LABEL = 'DeepSeek'
 
 // Model metadata is data, not code paths. Longest matching prefix wins.
+// deepseek-flash / deepseek-v4-pro are thinking-capable tool-calling models. Their context window and output
+// ceiling below are deliberately conservative (BLUSWAN's own output budget governs, not the provider maximum); they
+// were not verified against live provider documentation from this build and may be raised once confirmed.
+const THINKING = { toolCalling: true, reasoning: true, reasoningEffort: true, parallelToolCalls: true, contextWindow: 128000, maxOutputTokens: 32768 }
 const MODEL_CAPABILITIES = [
+  { prefix: 'deepseek-flash', caps: THINKING },
+  { prefix: 'deepseek-v4-pro', caps: THINKING },
   { prefix: 'deepseek-reasoner', caps: { toolCalling: true, reasoning: true, parallelToolCalls: true, contextWindow: 128000, maxOutputTokens: 32768 } },
   { prefix: 'deepseek-', caps: { toolCalling: true, reasoning: false, parallelToolCalls: true, contextWindow: 128000, maxOutputTokens: 8192 } },
 ]
 const FALLBACK = { toolCalling: true, contextWindow: 128000, maxOutputTokens: 8192 }
-export const MODELS = [{ id: 'deepseek-chat', displayName: 'DeepSeek Chat' }, { id: 'deepseek-reasoner', displayName: 'DeepSeek Reasoner' }]
+export const MODELS = [
+  { id: 'deepseek-flash', displayName: 'DeepSeek Flash' },
+  { id: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro' },
+  // Legacy identifiers stay selectable so existing sessions and manual choices keep working.
+  { id: 'deepseek-chat', displayName: 'DeepSeek Chat' },
+  { id: 'deepseek-reasoner', displayName: 'DeepSeek Reasoner' },
+]
+export const REASONING_EFFORTS = ['high', 'max']
 
 const errors = createProviderErrors({ id: DEEPSEEK_ID, label: LABEL })
 const protocol = createChatCompletionsProtocol({ errors, label: LABEL })
@@ -24,7 +37,23 @@ const protocol = createChatCompletionsProtocol({ errors, label: LABEL })
 export const capabilitiesFor = (model = '') => capabilitiesFromTable(MODEL_CAPABILITIES, model, FALLBACK)
 export const normalizeMessages = protocol.normalizeMessages
 export const normalizeTools = protocol.normalizeTools
-export const buildRequestBody = protocol.buildRequestBody
+
+/**
+ * DeepSeek wire mapping of the canonical `reasoningEffort`. Only models that declare the capability get the
+ * `thinking` switch and `reasoning_effort`; thinking mode ignores sampling parameters, so temperature is never sent.
+ */
+export function buildRequestBody(request, caps) {
+  const body = protocol.buildRequestBody(request, caps)
+  if (caps.reasoningEffort && request.reasoningEffort === 'off') {
+    body.thinking = { type: 'disabled' } // short utility calls (e.g. the routing classifier) must not spend their budget thinking
+  } else if (caps.reasoningEffort && request.reasoningEffort) {
+    const effort = REASONING_EFFORTS.includes(request.reasoningEffort) ? request.reasoningEffort : 'high'
+    body.thinking = { type: 'enabled' }
+    body.reasoning_effort = effort
+    delete body.temperature
+  }
+  return body
+}
 export const createChunkParser = protocol.createChunkParser
 export const errorFromResponse = errors.fromResponse
 export const errorFromException = errors.fromException
